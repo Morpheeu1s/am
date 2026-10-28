@@ -1,14 +1,53 @@
 /**
- * German Web Speech API & Native Audio Helper for Ambitieux
+ * German Web Speech API (TTS + SpeechRecognition STT + Shadowing Recorder)
  * Tailored for Goethe-Zertifikat A1: Start Deutsch 1
  * Fully optimized for iOS Safari (iPhone 16 / iOS 16-18), macOS, Android, and Windows
  */
+
+interface WebSpeechRecognitionAlternative {
+  transcript: string
+  confidence: number
+}
+
+interface WebSpeechRecognitionResult {
+  isFinal: boolean
+  length: number
+  [index: number]: WebSpeechRecognitionAlternative
+}
+
+interface WebSpeechRecognitionResultList {
+  length: number
+  [index: number]: WebSpeechRecognitionResult
+}
+
+interface WebSpeechRecognitionEvent {
+  results: WebSpeechRecognitionResultList
+}
+
+interface WebSpeechRecognitionErrorEvent {
+  error: string
+}
+
+interface WebSpeechRecognitionInstance {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  maxAlternatives: number
+  onresult: ((event: WebSpeechRecognitionEvent) => void) | null
+  onerror: ((event: WebSpeechRecognitionErrorEvent) => void) | null
+  onend: (() => void) | null
+  start: () => void
+  stop: () => void
+  abort: () => void
+}
 
 declare global {
   interface Window {
     __ambitieuxAudioUnlocked?: boolean
     __activeUtterances?: SpeechSynthesisUtterance[]
     __sharedAudioElement?: HTMLAudioElement
+    SpeechRecognition?: new () => WebSpeechRecognitionInstance
+    webkitSpeechRecognition?: new () => WebSpeechRecognitionInstance
   }
 }
 
@@ -107,12 +146,7 @@ if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
 }
 
 /**
- * Unlock iOS Audio Subsystem:
- * On iOS/Safari, audio playback & SpeechSynthesis are restricted until
- * an explicit user touch gesture fires. This function:
- * 1. Resumes Web Audio API AudioContext
- * 2. Pre-warms SpeechSynthesis with a silent German utterance
- * 3. Pre-warms HTMLAudioElement with silent audio
+ * Unlock iOS Audio Subsystem
  */
 export function unlockAudio(): void {
   if (typeof window === 'undefined') return
@@ -124,7 +158,6 @@ export function unlockAudio(): void {
   if ('speechSynthesis' in window) {
     try {
       window.speechSynthesis.resume()
-      // Silent short utterance to wake up the iOS speech daemon
       const silentUtterance = new SpeechSynthesisUtterance(' ')
       silentUtterance.lang = 'de-DE'
       silentUtterance.volume = 0.01
@@ -142,7 +175,6 @@ export function unlockAudio(): void {
       audio.preload = 'auto'
       window.__sharedAudioElement = audio
     }
-    // Tiny silent WAV (1 frame) to unlock audio element
     window.__sharedAudioElement.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
     window.__sharedAudioElement.play().catch(() => {})
   } catch {
@@ -187,27 +219,20 @@ export function getTTSStatus(): { isNativeGermanVoice: boolean; voiceName: strin
 
 /**
  * Speak German word or sentence
- * Fully synchronous path for iOS Safari to keep the user activation context alive.
- * @param text German text to pronounce
- * @param rate Speech rate (default 1.0 for standard natural German speed)
  */
 export function speakGerman(text: string, rate: number = 1.0): void {
   const cleanText = text.trim()
   if (!cleanText) return
   if (typeof window === 'undefined') return
 
-  // Ensure unlock was invoked
   unlockAudio()
 
-  // Primary Engine: Web Speech API (Supports iOS Siri German, Android Google TTS, Windows de-DE)
   if ('speechSynthesis' in window) {
     try {
-      // 1. Resume synthesizer if paused by iOS WebKit
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume()
       }
 
-      // 2. Clear any pending speech without freezing queue
       if (window.speechSynthesis.speaking) {
         window.speechSynthesis.cancel()
         window.speechSynthesis.resume()
@@ -226,7 +251,6 @@ export function speakGerman(text: string, rate: number = 1.0): void {
         utterance.voice = bestVoice
       }
 
-      // Prevent WebKit Garbage Collection bug on iOS Safari
       window.__activeUtterances = window.__activeUtterances || []
       window.__activeUtterances.push(utterance)
 
@@ -243,7 +267,6 @@ export function speakGerman(text: string, rate: number = 1.0): void {
           if (idx !== -1) window.__activeUtterances.splice(idx, 1)
         }
         console.warn('SpeechSynthesis error:', e)
-        // Fallback to audio element if speech failed
         fallbackAudioPlay(cleanText, rate)
       }
 
@@ -254,13 +277,14 @@ export function speakGerman(text: string, rate: number = 1.0): void {
     }
   }
 
-  // Fallback if SpeechSynthesis is completely unavailable
   fallbackAudioPlay(cleanText, rate)
 }
 
 /**
- * Streaming Audio Fallback for devices without Web Speech API
+ * Legacy alias for backward compatibility across components
  */
+export const speakFrench = speakGerman
+
 function fallbackAudioPlay(cleanText: string, rate: number = 1.0): void {
   try {
     const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=de&client=tw-ob&q=${encodeURIComponent(cleanText)}`
@@ -279,5 +303,209 @@ function fallbackAudioPlay(cleanText: string, rate: number = 1.0): void {
   }
 }
 
-// Backward compatibility alias
-export const speakFrench = speakGerman
+// ============================================================================
+// HYBRID SPEECH RECOGNITION (STT) & SHADOWING RECORDER (0 MB AI MODEL)
+// ============================================================================
+
+export function isSpeechRecognitionSupported(): boolean {
+  if (typeof window === 'undefined') return false
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition)
+}
+
+export interface SpeechRecognitionResultData {
+  transcript: string
+  alternatives: string[]
+  confidence: number
+  isFinal: boolean
+}
+
+let activeRecognition: WebSpeechRecognitionInstance | null = null
+let activeMediaRecorder: MediaRecorder | null = null
+let activeStream: MediaStream | null = null
+let recordedChunks: Blob[] = []
+let lastRecordedAudioUrl: string | null = null
+
+/**
+ * Play back the user's own recorded voice for Shadowing self-comparison
+ */
+export function playRecordedUserVoice(): boolean {
+  if (!lastRecordedAudioUrl) return false
+  try {
+    const audio = new Audio(lastRecordedAudioUrl)
+    audio.play().catch(() => {})
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function hasRecordedUserVoice(): boolean {
+  return Boolean(lastRecordedAudioUrl)
+}
+
+/**
+ * Start Hybrid German Speech Recognition (`de-DE`) + Optional Voice Recording
+ */
+export function startGermanSpeechRecognition(callbacks: {
+  onInterim?: (transcript: string) => void
+  onFinal: (result: SpeechRecognitionResultData) => void
+  onError?: (errMessage: string) => void
+  onEnd?: () => void
+}): void {
+  if (typeof window === 'undefined') return
+
+  stopGermanSpeechRecognition()
+
+  // Stop any ongoing TTS so microphone doesn't record the system voice
+  if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
+    window.speechSynthesis.cancel()
+  }
+
+  const SpeechRecConstructor = window.SpeechRecognition || window.webkitSpeechRecognition
+  if (!SpeechRecConstructor) {
+    callbacks.onError?.('Trình duyệt của bạn chưa hỗ trợ nhận diện giọng nói trực tiếp.')
+    return
+  }
+
+  try {
+    const recognition = new SpeechRecConstructor()
+    recognition.lang = 'de-DE'
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.maxAlternatives = 5
+
+    activeRecognition = recognition
+
+    let hasDeliveredFinal = false
+    let latestTranscript = ''
+    let latestAlternatives: string[] = []
+    let latestConfidence = 0.85
+
+    recognition.onresult = (event: WebSpeechRecognitionEvent) => {
+      const results = event.results
+      if (!results || results.length === 0) return
+
+      const lastResult = results[results.length - 1]
+      const primary = lastResult[0]
+      if (!primary) return
+
+      latestTranscript = primary.transcript.trim()
+      latestConfidence = primary.confidence || 0.85
+
+      const alts: string[] = []
+      for (let i = 0; i < lastResult.length; i++) {
+        if (lastResult[i]?.transcript) {
+          alts.push(lastResult[i].transcript.trim())
+        }
+      }
+      latestAlternatives = alts
+
+      if (lastResult.isFinal) {
+        hasDeliveredFinal = true
+        callbacks.onFinal({
+          transcript: latestTranscript,
+          alternatives: latestAlternatives,
+          confidence: latestConfidence,
+          isFinal: true
+        })
+      } else {
+        callbacks.onInterim?.(latestTranscript)
+      }
+    }
+
+    recognition.onerror = (event: WebSpeechRecognitionErrorEvent) => {
+      const code = event.error
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        callbacks.onError?.('Vui lòng cấp quyền Micro cho trình duyệt để luyện phát âm.')
+      } else if (code === 'no-speech') {
+        callbacks.onError?.('Không nghe thấy giọng nói. Hãy thử đọc to và rõ hơn nhé!')
+      } else if (code !== 'aborted') {
+        callbacks.onError?.(`Chưa nhận diện được âm thanh (${code}). Hãy thử lại!`)
+      }
+    }
+
+    recognition.onend = () => {
+      // On iOS Safari, sometimes onend fires right after interim result without isFinal=true
+      if (!hasDeliveredFinal && latestTranscript) {
+        hasDeliveredFinal = true
+        callbacks.onFinal({
+          transcript: latestTranscript,
+          alternatives: latestAlternatives.length > 0 ? latestAlternatives : [latestTranscript],
+          confidence: latestConfidence,
+          isFinal: true
+        })
+      }
+      stopMediaRecorderCapture()
+      callbacks.onEnd?.()
+    }
+
+    recognition.start()
+
+    // Also try to start parallel MediaRecorder for Shadowing self-listen playback
+    startMediaRecorderCapture()
+  } catch (err) {
+    callbacks.onError?.(`Không thể khởi động Micro: ${String(err)}`)
+  }
+}
+
+export function stopGermanSpeechRecognition(): void {
+  if (activeRecognition) {
+    try {
+      activeRecognition.stop()
+    } catch {
+      // Ignore
+    }
+    activeRecognition = null
+  }
+  stopMediaRecorderCapture()
+}
+
+function startMediaRecorderCapture(): void {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return
+  if (typeof MediaRecorder === 'undefined') return
+
+  navigator.mediaDevices
+    .getUserMedia({ audio: true })
+    .then((stream) => {
+      activeStream = stream
+      recordedChunks = []
+      const recorder = new MediaRecorder(stream)
+      activeMediaRecorder = recorder
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunks.push(e.data)
+        }
+      }
+
+      recorder.onstop = () => {
+        if (recordedChunks.length > 0) {
+          const blob = new Blob(recordedChunks, { type: recorder.mimeType || 'audio/webm' })
+          if (lastRecordedAudioUrl) {
+            URL.revokeObjectURL(lastRecordedAudioUrl)
+          }
+          lastRecordedAudioUrl = URL.createObjectURL(blob)
+        }
+        if (activeStream) {
+          activeStream.getTracks().forEach((t) => t.stop())
+          activeStream = null
+        }
+      }
+
+      recorder.start()
+    })
+    .catch(() => {
+      // Ignore if MediaRecorder cannot run alongside SpeechRecognition on some mobile OS
+    })
+}
+
+function stopMediaRecorderCapture(): void {
+  if (activeMediaRecorder && activeMediaRecorder.state !== 'inactive') {
+    try {
+      activeMediaRecorder.stop()
+    } catch {
+      // Ignore
+    }
+  }
+  activeMediaRecorder = null
+}

@@ -80,15 +80,15 @@ export function generateScrambleTiles(german: string): {
 
 /**
  * Builds an interleaved multi-modal queue where EVERY word is guaranteed 4 repetitions
- * across 4 distinct interaction styles:
+ * across distinct interaction styles (including Speaking / Pronunciation):
  *
  * - Lần 1 (Nhận diện & Mạo từ):
  *   + Nếu là danh từ (có der/die/das): 'article_quiz' (Chọn mạo từ der/die/das)
  *   + Nếu là từ loại khác: 'choice' (Đức ➜ Việt) hoặc 'new_intro' (Khám phá từ mới)
  * - Lần 2 (Phản xạ Nghe & Dịch ngược Trắc nghiệm):
- *   + Luân phiên 'listening_choice' (Nghe phát âm ➜ Chọn nghĩa) và 'reverse_choice' (Nhìn nghĩa Việt ➜ Chọn từ Đức)
- * - Lần 3 (Tương tác Xếp chữ & Dịch ngược Việt ➜ Đức):
- *   + Luân phiên 'scramble' (Xếp các mảnh ghép thành từ tiếng Đức) và 'reverse_choice' (Trắc nghiệm Việt ➜ Đức)
+ *   + Luân phiên 'reverse_choice' (Nhìn nghĩa Việt ➜ Chọn từ Đức) và 'listening_choice' (Nghe phát âm ➜ Chọn nghĩa)
+ * - Lần 3 (Luyện phát âm Giọng nói 🎙️ & Xếp mảnh chữ 🧩):
+ *   + Luân phiên 'speaking' (Đọc to từ tiếng Đức để chấm phát âm + Shadowing nghe lại giọng mình) và 'scramble' (Xếp chữ Duolingo)
  * - Lần 4 (Chủ động Gõ Dịch ngược Việt ➜ Đức / Điền từ / Dictée):
  *   + Luân phiên 'reverse' (Nhìn tiếng Việt ➜ Gõ từ tiếng Đức), 'cloze' (Điền từ vào câu), và 'dictee' (Nghe chép chính tả)
  *
@@ -117,7 +117,7 @@ export function buildInterleavedStudyTasks(words: Word[]): StudyTask[] {
       totalRounds
     })
 
-    // Lần 2: Phản xạ Nghe âm thanh & Trắc nghiệm Dịch ngược (Việt ➜ Đức)
+    // Lần 2: Phản xạ Dịch ngược Trắc nghiệm (Việt ➜ Đức) & Nghe hiểu
     const stage2Type: ExerciseType = index % 2 === 0 ? 'reverse_choice' : 'listening_choice'
     roundTasks[1].push({
       word,
@@ -126,8 +126,8 @@ export function buildInterleavedStudyTasks(words: Word[]): StudyTask[] {
       totalRounds
     })
 
-    // Lần 3: Xếp mảnh ghép chữ (Scramble) & Nghe/Trắc nghiệm ngược
-    const stage3Type: ExerciseType = 'scramble'
+    // Lần 3: Luyện Phát âm Giọng nói ('speaking' 🎙️) & Xếp mảnh chữ ('scramble' 🧩)
+    const stage3Type: ExerciseType = index % 2 === 0 ? 'speaking' : 'scramble'
     roundTasks[2].push({
       word,
       exerciseType: stage3Type,
@@ -135,8 +135,8 @@ export function buildInterleavedStudyTasks(words: Word[]): StudyTask[] {
       totalRounds
     })
 
-    // Lần 4: Gõ chủ động Dịch ngược Việt ➜ Đức ('reverse'), Điền ngữ cảnh ('cloze'), hoặc Nghe viết ('dictee')
-    let stage4Type: ExerciseType = 'reverse' // Mặc định ưu tiên Dịch ngược Việt -> Đức
+    // Lần 4: Chủ động Gõ Dịch ngược Việt ➜ Đức ('reverse'), Điền ngữ cảnh ('cloze'), hoặc Nghe viết ('dictee')
+    let stage4Type: ExerciseType = 'reverse' // Ưu tiên Dịch ngược Việt -> Đức
     if (index % 3 === 1 && word.example && word.example.length > 5) {
       stage4Type = 'cloze'
     } else if (index % 3 === 2) {

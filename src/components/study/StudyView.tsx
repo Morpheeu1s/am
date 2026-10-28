@@ -15,14 +15,23 @@ import {
   PlusCircle,
   Check,
   CheckCheck,
-  Puzzle
+  Puzzle,
+  Mic,
+  MicOff
 } from 'lucide-react'
 import type { Word, ReviewQuality, StudyTask } from '@/types'
 import { updateSRS, getMasteryInfo } from '@/lib/srs'
 import { updateWord } from '@/lib/db'
-import { speakGerman, unlockAudio } from '@/lib/speech'
+import {
+  speakGerman,
+  unlockAudio,
+  startGermanSpeechRecognition,
+  stopGermanSpeechRecognition,
+  playRecordedUserVoice,
+  hasRecordedUserVoice
+} from '@/lib/speech'
 import { playFeedback } from '@/lib/audio'
-import { evaluateAnswer, maskSentence } from '@/lib/fuzzy'
+import { evaluateAnswer, evaluateSpokenGerman, maskSentence } from '@/lib/fuzzy'
 import {
   buildInterleavedStudyTasks,
   getGermanArticleAndNoun,
@@ -77,13 +86,22 @@ export function StudyView({
   // Scramble tiles state (Duolingo tile puzzle)
   const [selectedTileIds, setSelectedTileIds] = useState<number[]>([])
 
+  // Speaking / Pronunciation state (Hybrid Web Speech API + Shadowing)
+  const [isRecordingSpeech, setIsRecordingSpeech] = useState(false)
+  const [spokenTranscript, setSpokenTranscript] = useState('')
+  const [speechScore, setSpeechScore] = useState<number | null>(null)
+  const [speechError, setSpeechError] = useState<string | null>(null)
+  const [canSpeakNow, setCanSpeakNow] = useState(true) // If false, temporarily switches speaking cards to scramble
+
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Current active task and word
   const currentTask = tasks[currentIndex]
   const currentWord = currentTask?.word
   const currentGerman = currentWord ? (currentWord.german || currentWord.french || '').trim() : ''
-  const exerciseType = currentTask?.exerciseType || 'choice'
+  const rawExerciseType = currentTask?.exerciseType || 'choice'
+  const exerciseType =
+    rawExerciseType === 'speaking' && !canSpeakNow ? 'scramble' : rawExerciseType
 
   // Reset/sync when initialWords prop changes externally
   if (initialWords !== prevInitialWords) {
@@ -94,6 +112,13 @@ export function StudyView({
     setCompletedTasksCount(0)
     setWordMistakesMap({})
   }
+
+  // Stop speech recognition if unmounted or card changes
+  useEffect(() => {
+    return () => {
+      stopGermanSpeechRecognition()
+    }
+  }, [currentIndex])
 
   // Pure derived scramble tiles without setState in useEffect
   const allScrambleTiles = useMemo<{ id: number; text: string }[]>(() => {
@@ -178,7 +203,8 @@ export function StudyView({
         exerciseType === 'new_intro' ||
         exerciseType === 'dictee' ||
         exerciseType === 'choice' ||
-        exerciseType === 'listening_choice'
+        exerciseType === 'listening_choice' ||
+        exerciseType === 'speaking'
       ) {
         const timer = setTimeout(() => {
           speakGerman(currentGerman, 1.0)
@@ -212,6 +238,7 @@ export function StudyView({
   }
 
   const resetCardState = () => {
+    stopGermanSpeechRecognition()
     setUserInput('')
     setSelectedChoice(null)
     setSelectedArticle(null)
@@ -220,6 +247,10 @@ export function StudyView({
     setFuzzyStatus('idle')
     setFuzzyMessage('')
     setSelectedTileIds([])
+    setIsRecordingSpeech(false)
+    setSpokenTranscript('')
+    setSpeechScore(null)
+    setSpeechError(null)
   }
 
   // Insert German Umlaut character into typing input
@@ -240,6 +271,84 @@ export function StudyView({
       input.focus()
       input.setSelectionRange(start + char.length, start + char.length)
     }, 10)
+  }
+
+  // Handle Voice Input for Typing Modes (Voice-to-Input)
+  const handleToggleVoiceTyping = () => {
+    unlockAudio()
+    if (isRecordingSpeech) {
+      stopGermanSpeechRecognition()
+      setIsRecordingSpeech(false)
+      return
+    }
+
+    playFeedback('click')
+    setIsRecordingSpeech(true)
+    setSpeechError(null)
+
+    startGermanSpeechRecognition({
+      onInterim: (transcript) => {
+        setUserInput(transcript)
+      },
+      onFinal: (res) => {
+        setIsRecordingSpeech(false)
+        setUserInput(res.transcript)
+      },
+      onError: (err) => {
+        setIsRecordingSpeech(false)
+        setSpeechError(err)
+      },
+      onEnd: () => {
+        setIsRecordingSpeech(false)
+      }
+    })
+  }
+
+  // Handle Speaking Exercise (Pronunciation Evaluation + Shadowing)
+  const handleToggleSpeakingChallenge = () => {
+    unlockAudio()
+    if (isRecordingSpeech) {
+      stopGermanSpeechRecognition()
+      setIsRecordingSpeech(false)
+      return
+    }
+
+    playFeedback('click')
+    setIsRecordingSpeech(true)
+    setSpeechError(null)
+    setSpokenTranscript('')
+    setSpeechScore(null)
+
+    startGermanSpeechRecognition({
+      onInterim: (transcript) => {
+        setSpokenTranscript(transcript)
+      },
+      onFinal: (res) => {
+        setIsRecordingSpeech(false)
+        const evalRes = evaluateSpokenGerman(res.alternatives, currentGerman)
+        setSpokenTranscript(evalRes.bestHeard)
+        setSpeechScore(evalRes.scorePercent)
+
+        if (evalRes.isPass) {
+          playFeedback('success')
+          setFuzzyStatus('correct')
+          setFuzzyMessage(evalRes.feedback)
+          setIsAnswerSubmitted(true)
+          setIsAnswerRevealed(true)
+        } else {
+          playFeedback('typo')
+          setFuzzyStatus('typo')
+          setFuzzyMessage(evalRes.feedback)
+        }
+      },
+      onError: (err) => {
+        setIsRecordingSpeech(false)
+        setSpeechError(err)
+      },
+      onEnd: () => {
+        setIsRecordingSpeech(false)
+      }
+    })
   }
 
   // 1. Handle Article Quiz Click (der / die / das)
@@ -401,7 +510,7 @@ export function StudyView({
     } else if (evaluation.status === 'typo') {
       playFeedback('typo')
       setFuzzyStatus('typo')
-      setFuzzyMessage(evaluation.message || 'Gần đúng rồi, chú ý ký tự Umlaut hoặc mạo từ!')
+      setFuzzyMessage(evaluation.message || 'Gần đúng rồi, chú ý ký tự Umlaut!')
       inputRef.current?.focus()
     } else {
       playFeedback('error')
@@ -568,7 +677,7 @@ export function StudyView({
                 style={{ borderRadius: 9999 }}
                 className="text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-[#a8c7fa] bg-[#004a77]/40 px-3 py-0.5 sm:px-3.5 sm:py-1 border border-[#004a77]"
               >
-                Goethe A1 · Đa tương tác
+                Goethe A1 · Đa tương tác + Luyện phát âm 🎙️
               </span>
               <span
                 style={{ borderRadius: 9999 }}
@@ -582,7 +691,7 @@ export function StudyView({
               Học từ vựng đa chiều 4 vòng lặp !
             </h2>
             <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed mb-5 sm:mb-6">
-              Mỗi từ vựng được <strong>lặp lại 4 lần xen kẽ ngẫu nhiên</strong> với các dạng tương tác khác nhau: Chọn mạo từ (der/die/das), Phản xạ Việt ➜ Đức, Nghe hiểu, Xếp mảnh chữ và Gõ dịch ngược Việt ➜ Đức.
+              Mỗi từ vựng được <strong>lặp lại 4 lần xen kẽ ngẫu nhiên</strong> với các dạng tương tác đa giác quan: Quiz mạo từ (der/die/das), Dịch ngược Việt ➜ Đức, <strong>Luyện phát âm giọng nói 🎙️</strong>, Xếp mảnh chữ và Gõ chính tả.
             </p>
 
             {/* 4 Interactive Modalities Showcase */}
@@ -616,11 +725,11 @@ export function StudyView({
                 className="p-3 bg-[#282a2c] border border-[#3c4043] text-center space-y-1"
               >
                 <div className="text-[#fbbc04] font-bold text-xs flex items-center justify-center gap-1">
-                  <Puzzle className="h-3.5 w-3.5" />
+                  <Mic className="h-3.5 w-3.5" />
                   Vòng 3
                 </div>
-                <div className="text-[11px] text-[#e3e3e3] font-semibold">Xếp mảnh chữ</div>
-                <div className="text-[10px] text-[#8e918f]">Ghép từ Duolingo</div>
+                <div className="text-[11px] text-[#e3e3e3] font-semibold">Phát âm & Xếp chữ</div>
+                <div className="text-[10px] text-[#8e918f]">Nói 🎙️ & Ghép từ</div>
               </div>
 
               <div
@@ -802,6 +911,7 @@ export function StudyView({
               {exerciseType === 'article_quiz' && '🔵 Quiz Mạo từ (der/die/das)'}
               {exerciseType === 'reverse_choice' && '🇻🇳➜🇩🇪 Chọn từ tiếng Đức'}
               {exerciseType === 'listening_choice' && '🎧 Nghe âm thanh ➜ Chọn nghĩa'}
+              {exerciseType === 'speaking' && '🎙️ Luyện phát âm giọng nói'}
               {exerciseType === 'scramble' && '🧩 Xếp mảnh chữ tiếng Đức'}
               {exerciseType === 'choice' && '🇩🇪➜🇻🇳 Chọn nghĩa tiếng Việt'}
               {exerciseType === 'reverse' && '✍️ Dịch ngược Việt ➜ Gõ tiếng Đức'}
@@ -1071,7 +1181,141 @@ export function StudyView({
             </div>
           )}
 
-          {/* D. SCRAMBLE TILES (Xếp mảnh chữ Duolingo) */}
+          {/* D. SPEAKING / PRONUNCIATION CHALLENGE (🎙️ Luyện phát âm + Shadowing) */}
+          {exerciseType === 'speaking' && (
+            <div className="space-y-4 sm:space-y-5 py-2 text-center">
+              <div className="space-y-1">
+                <span className="text-xs text-[#fbbc04] font-semibold uppercase tracking-wider">
+                  Luyện phát âm tiếng Đức chuẩn
+                </span>
+                <div className="flex items-center justify-center gap-2.5 mt-1">
+                  <h3 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight font-outfit">
+                    {currentGerman}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={(e) => handlePronounce(e)}
+                    style={{ borderRadius: 9999 }}
+                    className="h-10 w-10 flex items-center justify-center text-[#a8c7fa] hover:bg-[#004a77]/40 border border-[#a8c7fa]/30 transition-all cursor-pointer active:scale-95 shrink-0"
+                    title="Nghe mẫu bản xứ"
+                  >
+                    <Volume2 className="h-5 w-5" />
+                  </button>
+                </div>
+                {currentWord.ipa && (
+                  <div className="text-xs sm:text-sm font-mono text-[#a8c7fa]/90">{currentWord.ipa}</div>
+                )}
+                <div className="text-xs sm:text-sm text-[#c4c7c5] mt-1">
+                  Nghĩa: <span className="text-white font-semibold">{currentWord.vietnamese}</span>
+                </div>
+              </div>
+
+              {/* Big Pulsing Microphone Button */}
+              {!isAnswerRevealed && (
+                <div className="flex flex-col items-center space-y-3 py-2">
+                  <button
+                    type="button"
+                    onClick={handleToggleSpeakingChallenge}
+                    style={{
+                      width: 84,
+                      height: 84,
+                      borderRadius: 9999,
+                      boxShadow: isRecordingSpeech
+                        ? '0 0 32px 6px rgba(239, 68, 68, 0.55)'
+                        : '0 8px 24px -2px rgba(251, 188, 4, 0.3)'
+                    }}
+                    className={`flex items-center justify-center border-2 transition-all cursor-pointer active:scale-95 ${
+                      isRecordingSpeech
+                        ? 'bg-[#8c1d18] border-[#f2b8b5] text-white animate-pulse'
+                        : 'bg-[#282a2c] hover:bg-[#333538] border-[#fbbc04] text-[#fbbc04]'
+                    }`}
+                  >
+                    {isRecordingSpeech ? (
+                      <MicOff className="h-9 w-9" />
+                    ) : (
+                      <Mic className="h-9 w-9" />
+                    )}
+                  </button>
+
+                  <div className="text-xs sm:text-sm font-medium text-[#e3e3e3]">
+                    {isRecordingSpeech
+                      ? '🔴 Đang lắng nghe... Hãy đọc to từ tiếng Đức!'
+                      : 'Chạm vào Micro 🎙️ và đọc to từ trên'}
+                  </div>
+
+                  {/* Live Transcript & Feedback */}
+                  {spokenTranscript && (
+                    <div
+                      style={{ borderRadius: 16 }}
+                      className="px-4 py-2.5 bg-[#131314] border border-[#3c4043] text-xs sm:text-sm space-y-1 max-w-sm mx-auto"
+                    >
+                      <div className="text-[#8e918f]">
+                        Máy nghe được: <strong className="text-white">&ldquo;{spokenTranscript}&rdquo;</strong>
+                        {speechScore !== null && (
+                          <span className="ml-2 text-[#fbbc04] font-mono font-bold">({speechScore}%)</span>
+                        )}
+                      </div>
+                      {fuzzyStatus === 'typo' && (
+                        <div className="text-[#ffe082] text-xs">{fuzzyMessage}</div>
+                      )}
+                    </div>
+                  )}
+
+                  {speechError && (
+                    <div className="text-xs text-[#f2b8b5] bg-[#410002]/40 px-3.5 py-2 rounded-xl border border-[#93000a]/60">
+                      {speechError}
+                    </div>
+                  )}
+
+                  {/* Self-Compare Shadowing Button if user recorded audio */}
+                  {hasRecordedUserVoice() && !isRecordingSpeech && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => playRecordedUserVoice()}
+                      style={{ borderRadius: 9999 }}
+                      className="text-xs text-[#a8c7fa] border-[#004a77] hover:bg-[#004a77]/30 cursor-pointer"
+                    >
+                      <Headphones className="h-3.5 w-3.5 mr-1.5" />
+                      Nghe lại giọng vừa thu của bạn
+                    </Button>
+                  )}
+
+                  {/* Fallback buttons: Can't speak right now OR Pass manually after trying */}
+                  <div className="flex items-center justify-center gap-3 pt-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        playFeedback('click')
+                        setCanSpeakNow(false)
+                      }}
+                      className="text-xs text-[#8e918f] hover:text-white underline underline-offset-4 cursor-pointer"
+                    >
+                      Không tiện nói lúc này (Chuyển sang Xếp chữ)
+                    </button>
+
+                    {spokenTranscript && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          playFeedback('success')
+                          setFuzzyStatus('correct')
+                          setIsAnswerSubmitted(true)
+                          setIsAnswerRevealed(true)
+                        }}
+                        className="text-xs text-[#34a853] hover:underline font-semibold cursor-pointer"
+                      >
+                        Đã tự đọc đúng ➜ Tiếp tục
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* E. SCRAMBLE TILES (Xếp mảnh chữ Duolingo) */}
           {exerciseType === 'scramble' && (
             <div className="space-y-4 py-1 text-center">
               <div className="space-y-1">
@@ -1154,7 +1398,7 @@ export function StudyView({
             </div>
           )}
 
-          {/* E. MULTIPLE CHOICE (Đức ➜ Việt) */}
+          {/* F. MULTIPLE CHOICE (Đức ➜ Việt) */}
           {exerciseType === 'choice' && (
             <div className="space-y-4 sm:space-y-5 py-1">
               <div className="space-y-1">
@@ -1215,7 +1459,7 @@ export function StudyView({
             </div>
           )}
 
-          {/* F. DICTÉE (Nghe chép chính tả tiếng Đức) */}
+          {/* G. DICTÉE (Nghe chép chính tả tiếng Đức) */}
           {exerciseType === 'dictee' && (
             <div className="flex flex-col items-center space-y-3.5 py-2 sm:py-3">
               <button
@@ -1245,7 +1489,7 @@ export function StudyView({
             </div>
           )}
 
-          {/* G. REVERSE TYPING (Dịch ngược Việt ➜ Gõ từ tiếng Đức) */}
+          {/* H. REVERSE TYPING (Dịch ngược Việt ➜ Gõ từ tiếng Đức) */}
           {exerciseType === 'reverse' && (
             <div className="space-y-3 sm:space-y-4 py-1 sm:py-2">
               <div className="text-xs sm:text-sm text-[#34a853] font-semibold flex items-center justify-center gap-1.5">
@@ -1270,7 +1514,7 @@ export function StudyView({
             </div>
           )}
 
-          {/* H. CLOZE TEST (Điền từ vào câu ngữ cảnh) */}
+          {/* I. CLOZE TEST (Điền từ vào câu ngữ cảnh) */}
           {exerciseType === 'cloze' && (
             <div className="space-y-3 py-1 text-left">
               <div className="text-xs sm:text-sm text-[#c4c7c5] font-medium flex items-center gap-1.5">
@@ -1312,7 +1556,7 @@ export function StudyView({
           </div>
         )}
 
-        {/* Interactive Answer Input for Typing Modes */}
+        {/* Interactive Answer Input for Typing Modes (With Built-in Voice-to-Text Mic Button!) */}
         {!isAnswerRevealed && (exerciseType === 'dictee' || exerciseType === 'reverse' || exerciseType === 'cloze') && (
           <form onSubmit={handleSubmitTyping} className="mt-3.5 space-y-3">
             <div className="relative">
@@ -1323,26 +1567,34 @@ export function StudyView({
                   setUserInput(e.target.value)
                   if (fuzzyStatus !== 'idle') setFuzzyStatus('idle')
                 }}
-                placeholder="Gõ từ tiếng Đức (ví dụ: der Tisch)..."
+                placeholder={
+                  isRecordingSpeech
+                    ? 'Đang nghe bạn đọc tiếng Đức...'
+                    : 'Gõ hoặc bấm 🎙️ đọc tiếng Đức...'
+                }
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="none"
                 spellCheck="false"
                 warning={fuzzyStatus === 'typo'}
                 error={fuzzyStatus === 'incorrect'}
-                className="pr-11 text-center text-base sm:text-lg font-medium h-12 sm:h-14"
+                className="pr-12 text-center text-base sm:text-lg font-medium h-12 sm:h-14"
               />
 
-              {exerciseType === 'dictee' && (
-                <button
-                  type="button"
-                  onClick={(e) => handlePronounce(e)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[#c4c7c5] hover:text-white p-1 cursor-pointer"
-                  title="Nghe lại"
-                >
-                  <Volume2 className="h-5 w-5 text-[#a8c7fa]" />
-                </button>
-              )}
+              {/* Voice-to-Input Mic button right inside the input box */}
+              <button
+                type="button"
+                onClick={handleToggleVoiceTyping}
+                style={{ borderRadius: 9999 }}
+                className={`absolute right-2.5 top-1/2 -translate-y-1/2 h-9 w-9 flex items-center justify-center transition-all cursor-pointer ${
+                  isRecordingSpeech
+                    ? 'bg-[#8c1d18] text-white animate-pulse'
+                    : 'text-[#c4c7c5] hover:text-white hover:bg-[#3c4043]/60'
+                }`}
+                title="Bấm để nói tiếng Đức thay vì gõ phím"
+              >
+                <Mic className="h-4 w-4 text-[#fbbc04]" />
+              </button>
             </div>
 
             {/* Typo Warning Banner */}
@@ -1386,8 +1638,8 @@ export function StudyView({
         {/* Revealed Card Details & Actionable Next Button */}
         {isAnswerRevealed && (
           <div className="mt-4 pt-4 border-t border-[#3c4043]/80 space-y-3.5 animate-in fade-in-50 duration-200">
-            {/* German Word & Pronunciation */}
-            <div className="text-center space-y-0.5">
+            {/* German Word & Pronunciation + Self-Listen Shadowing */}
+            <div className="text-center space-y-1">
               <div className="flex items-center justify-center gap-2">
                 <h3 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white tracking-tight font-outfit">
                   {currentGerman}
@@ -1397,10 +1649,22 @@ export function StudyView({
                   onClick={(e) => handlePronounce(e)}
                   style={{ borderRadius: 9999 }}
                   className="h-8 w-8 sm:h-9 sm:w-9 flex items-center justify-center text-[#a8c7fa] hover:bg-[#004a77]/30 border border-[#a8c7fa]/20 transition-all cursor-pointer active:scale-95 shrink-0"
-                  title="Nghe lại"
+                  title="Nghe lại giọng chuẩn"
                 >
                   <Volume2 className="h-4 w-4" />
                 </button>
+                {hasRecordedUserVoice() && (
+                  <button
+                    type="button"
+                    onClick={() => playRecordedUserVoice()}
+                    style={{ borderRadius: 9999 }}
+                    className="h-8 px-2.5 flex items-center gap-1 text-[11px] font-medium text-[#fbbc04] bg-[#5c3e00]/40 hover:bg-[#5c3e00]/70 border border-[#fbbc04]/40 transition-all cursor-pointer"
+                    title="Nghe lại giọng bạn vừa đọc"
+                  >
+                    <Headphones className="h-3.5 w-3.5" />
+                    <span>Giọng bạn</span>
+                  </button>
+                )}
               </div>
 
               {currentWord.ipa && (
@@ -1444,7 +1708,7 @@ export function StudyView({
               {fuzzyStatus === 'correct' ? (
                 <span className="flex items-center gap-1.5 text-[#c4eed0] font-semibold text-center">
                   <CheckCircle2 className="h-4 w-4 text-[#34a853] shrink-0" />
-                  Chính xác!{' '}
+                  {fuzzyMessage || 'Chính xác!'}{' '}
                   {currentTask.round < currentTask.totalRounds
                     ? `Sẵn sàng cho lần lặp ${currentTask.round + 1}/${currentTask.totalRounds}.`
                     : 'Đã hoàn thành cả 4 vòng lặp của từ này!'}

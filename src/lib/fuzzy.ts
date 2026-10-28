@@ -1,7 +1,7 @@
 import type { FuzzyCheckResult } from '@/types'
 
 /**
- * Clean and normalize a string (lowercase, trim extra spaces, normalize quotes)
+ * Clean and normalize a string (lowercase, trim extra spaces, strip punctuation ?, !, ., ,, normalize quotes)
  */
 export function normalizeText(text: string): string {
   if (!text) return ''
@@ -10,7 +10,9 @@ export function normalizeText(text: string): string {
     .trim()
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
+    .replace(/[?!.,;:()[\]]/g, '')
     .replace(/\s+/g, ' ')
+    .trim()
 }
 
 /**
@@ -74,7 +76,7 @@ export function stripArticle(text: string): string {
 
 /**
  * Fuzzy check user's answer against the target German word
- * - Exact match (ignoring leading article or case): correct
+ * - Exact match (ignoring punctuation and case): correct
  * - Missing Umlaut (ä/ö/ü/ß) or 1 character typo: typo warning ("Gần đúng rồi, chú ý Umlaut ä, ö, ü hoặc ß!")
  * - Otherwise: incorrect
  */
@@ -90,7 +92,7 @@ export function evaluateAnswer(userAnswer: string, expectedAnswer: string): Fuzz
     }
   }
 
-  // Exact match
+  // Exact match (with punctuation already stripped by normalizeText)
   if (normUser === normExpected) {
     return {
       status: 'correct',
@@ -149,6 +151,105 @@ export function evaluateAnswer(userAnswer: string, expectedAnswer: string): Fuzz
     status: 'incorrect',
     message: 'Chưa chính xác!',
     distance
+  }
+}
+
+/**
+ * Evaluate spoken German pronunciation from Web Speech API against target word
+ */
+export function evaluateSpokenGerman(
+  spokenAlternatives: string[],
+  expectedGerman: string
+): {
+  isPass: boolean
+  scorePercent: number
+  bestHeard: string
+  feedback: string
+} {
+  if (!spokenAlternatives || spokenAlternatives.length === 0) {
+    return {
+      isPass: false,
+      scorePercent: 0,
+      bestHeard: '',
+      feedback: 'Không nghe rõ. Bạn hãy bấm Micro và đọc to lại nhé!'
+    }
+  }
+
+  const normExpected = normalizeText(expectedGerman)
+  const expectedBare = stripArticle(normExpected)
+
+  // Map common German spoken numbers to words in case STT returns digits ("1" -> "eins")
+  const digitToGerman: Record<string, string> = {
+    '0': 'null',
+    '1': 'eins',
+    '2': 'zwei',
+    '3': 'drei',
+    '4': 'vier',
+    '5': 'fünf',
+    '6': 'sechs',
+    '7': 'sieben',
+    '8': 'acht',
+    '9': 'neun',
+    '10': 'zehn',
+    '11': 'elf',
+    '12': 'zwölf',
+    '20': 'zwanzig',
+    '100': 'hundert'
+  }
+
+  let bestScore = 0
+  let bestHeard = spokenAlternatives[0] || ''
+
+  for (const rawAlt of spokenAlternatives) {
+    const convertedAlt = rawAlt
+      .split(/\s+/)
+      .map((token) => digitToGerman[token] || token)
+      .join(' ')
+
+    const normSpoken = normalizeText(convertedAlt)
+    const spokenBare = stripArticle(normSpoken)
+
+    if (
+      normSpoken === normExpected ||
+      (spokenBare.length > 0 && spokenBare === expectedBare) ||
+      normSpoken.includes(expectedBare)
+    ) {
+      return {
+        isPass: true,
+        scorePercent: 100,
+        bestHeard: rawAlt,
+        feedback: 'Phát âm chuẩn xác bản xứ! Wunderbar!'
+      }
+    }
+
+    // Compare Levenshtein similarity
+    const distFull = levenshteinDistance(normSpoken, normExpected)
+    const distBare = levenshteinDistance(spokenBare, expectedBare)
+    const minDist = Math.min(distFull, distBare)
+    const maxLen = Math.max(1, expectedBare.length)
+    const similarity = Math.max(0, Math.round(((maxLen - minDist) / maxLen) * 100))
+
+    if (similarity > bestScore) {
+      bestScore = similarity
+      bestHeard = rawAlt
+    }
+  }
+
+  // Pass if similarity >= 70%
+  if (bestScore >= 70) {
+    return {
+      isPass: true,
+      scorePercent: bestScore,
+      bestHeard,
+      feedback: `Phát âm tốt (${bestScore}%)! Máy nghe được: "${bestHeard}"`
+    }
+  }
+
+  return {
+    isPass: false,
+    scorePercent: bestScore,
+    bestHeard,
+    feedback: `Máy nghe thành "${bestHeard}" (${bestScore}%). Hãy nghe mẫu và đọc lại rõ hơn nhé!`
   }
 }
 

@@ -17,7 +17,7 @@ export interface Word {
 
 export type ReviewQuality = 0 | 1 | 2 | 3 | 4 | 5
 
-// Multi-modal interactive exercise types (5 distinct stages per word)
+// Multi-modal interactive exercise types (including Speaking / Pronunciation)
 export type ExerciseType =
   | 'new_intro'
   | 'choice'           // Đức ➜ Việt (Trắc nghiệm chọn nghĩa tiếng Việt)
@@ -25,6 +25,7 @@ export type ExerciseType =
   | 'article_quiz'     // Chọn mạo từ chuẩn der / die / das cho danh từ
   | 'listening_choice' // Nghe âm thanh ➜ Chọn nghĩa đúng
   | 'scramble'         // Xếp mảnh chữ / ký tự (Duolingo style)
+  | 'speaking'         // 🎙️ Luyện phát âm giọng nói tiếng Đức + Nghe lại giọng mình (Shadowing)
   | 'reverse'          // Dịch ngược Việt ➜ Gõ từ tiếng Đức
   | 'dictee'           // Nghe phát âm ➜ Chép chính tả tiếng Đức
   | 'cloze'            // Điền từ tiếng Đức còn thiếu vào câu ngữ cảnh
