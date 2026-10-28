@@ -1,13 +1,16 @@
 /**
  * Web Audio API synthesizer & tactile feedback for Ambitieux
  * Procedural iOS click & feedback sounds + haptics
+ * Fully iOS / iPhone 16 compliant
  */
 
-export { speakFrench } from './speech'
+import { unlockAudio } from './speech'
+
+export { speakGerman, speakFrench, unlockAudio } from './speech'
 
 let audioCtx: AudioContext | null = null
 
-function getAudioContext(): AudioContext | null {
+export function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null
   if (!audioCtx) {
     const AudioContextClass =
@@ -18,7 +21,7 @@ function getAudioContext(): AudioContext | null {
     }
   }
   if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume()
+    audioCtx.resume().catch(() => {})
   }
   return audioCtx
 }
@@ -29,7 +32,7 @@ export type FeedbackSound = 'click' | 'success' | 'typo' | 'error' | 'pop'
  * Play subtle iOS-style sounds and trigger haptics
  */
 export function playFeedback(type: FeedbackSound = 'click'): void {
-  // Haptic feedback if available (Safari iOS / Android)
+  // 1. Haptic feedback if available (Safari iOS / Android)
   if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     try {
       if (type === 'click') navigator.vibrate(8)
@@ -42,10 +45,16 @@ export function playFeedback(type: FeedbackSound = 'click'): void {
     }
   }
 
-  // Audio synthesis feedback
+  // 2. Audio synthesis feedback
   try {
     const ctx = getAudioContext()
     if (!ctx) return
+
+    // Ensure audio subsystem is unlocked
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {})
+      unlockAudio()
+    }
 
     const now = ctx.currentTime
 

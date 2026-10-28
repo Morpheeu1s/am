@@ -7,7 +7,6 @@ import {
   Database,
   CheckCircle2,
   FileText,
-  Smartphone,
   Trash2,
   Sparkles,
   Sliders
@@ -30,7 +29,7 @@ import {
   type ReminderConfig
 } from '@/lib/notifications'
 import { getStudyConfig, saveStudyConfig } from '@/lib/srs'
-import { playFeedback } from '@/lib/audio'
+import { playFeedback, unlockAudio } from '@/lib/audio'
 import { speakGerman, getTTSStatus } from '@/lib/speech'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
@@ -60,6 +59,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleBatchSizeChange = (size: number) => {
+    unlockAudio()
     playFeedback('click')
     const updated = { ...studyConfig, newWordsPerBatch: size }
     setStudyConfig(updated)
@@ -155,6 +155,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
 
   // Reset to default Goethe-Zertifikat A1 words
   const handleResetToDefault = async () => {
+    unlockAudio()
     playFeedback('pop')
     await resetDatabaseToDefault()
     setIsResetConfirmOpen(false)
@@ -172,19 +173,19 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
   }
 
   const cardStyle: React.CSSProperties = {
-    borderRadius: 28,
+    borderRadius: 24,
     backgroundColor: '#1e1f20',
     border: '1px solid rgba(255, 255, 255, 0.08)',
     boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.4)'
   }
 
   return (
-    <div className="w-full max-w-xl md:max-w-2xl mx-auto space-y-5 pb-20">
+    <div className="w-full max-w-xl md:max-w-2xl mx-auto space-y-4 sm:space-y-5 pb-20">
       {/* Success Notification Alert Banner */}
       {importStatusMessage && (
         <div
           style={{ borderRadius: 20 }}
-          className="flex items-center gap-2.5 p-4 bg-[#0f5223]/30 border border-[#34a853]/60 text-[#c4eed0] text-xs md:text-sm animate-in fade-in"
+          className="flex items-center gap-2.5 p-3.5 sm:p-4 bg-[#0f5223]/30 border border-[#34a853]/60 text-[#c4eed0] text-xs sm:text-sm animate-in fade-in"
         >
           <CheckCircle2 className="h-4 w-4 shrink-0 text-[#34a853]" />
           <span className="font-medium">{importStatusMessage}</span>
@@ -192,18 +193,18 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
       )}
 
       {/* Section 0: Cấu hình cơ chế học (Material 3 Card) */}
-      <div style={cardStyle} className="p-6 md:p-7 space-y-4">
-        <div className="flex items-center gap-2.5 text-base font-bold text-white tracking-tight font-outfit">
-          <Sliders className="h-5 w-5 text-[#a8c7fa]" />
+      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
+        <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
+          <Sliders className="h-4 w-4 sm:h-5 sm:w-5 text-[#a8c7fa]" />
           Cơ chế học & Phân bổ kho từ Goethe A1
         </div>
 
-        <p className="text-xs md:text-sm text-[#c4c7c5] leading-relaxed">
+        <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
           Toàn bộ từ vựng theo khung tham chiếu châu Âu chuẩn đề thi <strong>Goethe-Zertifikat A1: Start Deutsch 1</strong>. Mỗi phiên học sẽ ưu tiên ôn lại các từ cũ đến hạn, kèm theo một số lượng từ mới được bốc tự động từ kho.
         </p>
 
-        <div className="flex items-center justify-between pt-2">
-          <span className="text-xs md:text-sm text-[#e3e3e3] font-medium">Số từ mới mỗi đợt:</span>
+        <div className="flex items-center justify-between pt-1 sm:pt-2 gap-2 flex-wrap">
+          <span className="text-xs sm:text-sm text-[#e3e3e3] font-medium">Số từ mới mỗi đợt:</span>
           {/* Material 3 Segmented Button */}
           <div
             style={{ borderRadius: 9999 }}
@@ -214,7 +215,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
                 key={size}
                 onClick={() => handleBatchSizeChange(size)}
                 style={{ borderRadius: 9999 }}
-                className={`px-3.5 py-1 text-xs font-semibold transition-all cursor-pointer ${
+                className={`px-3 sm:px-3.5 py-1 text-xs font-semibold transition-all cursor-pointer ${
                   studyConfig.newWordsPerBatch === size
                     ? 'bg-[#004a77] text-[#c2e7ff] shadow-sm'
                     : 'text-[#c4c7c5] hover:text-white hover:bg-[#282a2c]'
@@ -228,17 +229,17 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
       </div>
 
       {/* Section 1: Nạp & Xuất dữ liệu */}
-      <div style={cardStyle} className="p-6 md:p-7 space-y-4">
-        <div className="flex items-center gap-2.5 text-base font-bold text-white tracking-tight font-outfit">
-          <Database className="h-5 w-5 text-[#a8c7fa]" />
+      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
+        <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
+          <Database className="h-4 w-4 sm:h-5 sm:w-5 text-[#a8c7fa]" />
           Dữ liệu & Đồng bộ (Anki / CSV)
         </div>
 
-        <p className="text-xs md:text-sm text-[#c4c7c5] leading-relaxed">
+        <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
           Tương thích hoàn toàn với bộ thẻ Anki (.txt, .tsv) và bảng tính CSV (, hoặc ;). Toàn bộ dữ liệu được lưu trữ 100% nội bộ trên trình duyệt (IndexedDB) của bạn.
         </p>
 
-        <div className="grid grid-cols-2 gap-3 pt-1">
+        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 pt-1">
           <input
             type="file"
             ref={fileInputRef}
@@ -252,7 +253,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
             size="md"
             onClick={() => fileInputRef.current?.click()}
             style={{ borderRadius: 9999 }}
-            className="w-full text-xs md:text-sm cursor-pointer h-12"
+            className="w-full text-xs sm:text-sm cursor-pointer h-11 sm:h-12"
           >
             <Upload className="h-4 w-4 mr-1.5 text-[#a8c7fa]" />
             Nạp file Anki/CSV
@@ -263,7 +264,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
             size="md"
             onClick={() => setIsPasteModalOpen(true)}
             style={{ borderRadius: 9999 }}
-            className="w-full text-xs md:text-sm cursor-pointer h-12"
+            className="w-full text-xs sm:text-sm cursor-pointer h-11 sm:h-12"
           >
             <FileText className="h-4 w-4 mr-1.5 text-[#c4eed0]" />
             Dán bảng Text
@@ -271,82 +272,83 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
         </div>
 
         {/* Export buttons */}
-        <div className="pt-3 border-t border-[#3c4043]/60">
-          <div className="text-xs text-[#8e918f] font-medium mb-2.5">Xuất dữ liệu dự phòng:</div>
-          <div className="grid grid-cols-3 gap-2.5">
+        <div className="pt-2.5 border-t border-[#3c4043]/60">
+          <div className="text-xs text-[#8e918f] font-medium mb-2">Xuất dữ liệu dự phòng:</div>
+          <div className="grid grid-cols-3 gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={handleExportAnki}
               style={{ borderRadius: 9999 }}
-              className="text-xs py-1 h-10 text-[#c4c7c5] hover:text-white cursor-pointer"
+              className="text-xs py-1 h-9 sm:h-10 text-[#c4c7c5] hover:text-white cursor-pointer px-1"
             >
-              <Download className="h-3.5 w-3.5 mr-1" />
-              Anki TSV
+              <Download className="h-3.5 w-3.5 mr-1 shrink-0" />
+              <span className="truncate">Anki TSV</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={handleExportCSV}
               style={{ borderRadius: 9999 }}
-              className="text-xs py-1 h-10 text-[#c4c7c5] hover:text-white cursor-pointer"
+              className="text-xs py-1 h-9 sm:h-10 text-[#c4c7c5] hover:text-white cursor-pointer px-1"
             >
-              <Download className="h-3.5 w-3.5 mr-1" />
-              CSV
+              <Download className="h-3.5 w-3.5 mr-1 shrink-0" />
+              <span className="truncate">CSV</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={handleExportJSON}
               style={{ borderRadius: 9999 }}
-              className="text-xs py-1 h-10 text-[#c4c7c5] hover:text-white cursor-pointer"
+              className="text-xs py-1 h-9 sm:h-10 text-[#c4c7c5] hover:text-white cursor-pointer px-1"
             >
-              <Download className="h-3.5 w-3.5 mr-1" />
-              JSON Full
+              <Download className="h-3.5 w-3.5 mr-1 shrink-0" />
+              <span className="truncate">JSON Full</span>
             </Button>
           </div>
         </div>
       </div>
 
       {/* Section 2: Phát âm tiếng Đức chuẩn tốc độ 1.0 */}
-      <div style={cardStyle} className="p-6 md:p-7 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5 text-base font-bold text-white tracking-tight font-outfit">
-            <Volume2 className="h-5 w-5 text-[#c084fc]" />
-            Phát âm tiếng Đức (Tốc độ 1.0 bản xứ)
+      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
+            <Volume2 className="h-4 w-4 sm:h-5 sm:w-5 text-[#c084fc]" />
+            Phát âm tiếng Đức (1.0 bản xứ)
           </div>
           <span
             style={{ borderRadius: 9999 }}
-            className="text-[10px] md:text-xs font-semibold px-3 py-1 bg-[#381e72]/60 text-[#e8def8] border border-[#4f378b]"
+            className="text-[10px] sm:text-xs font-semibold px-2.5 py-0.5 sm:px-3 sm:py-1 bg-[#381e72]/60 text-[#e8def8] border border-[#4f378b] shrink-0"
           >
-            {getTTSStatus().isNativeGermanVoice ? 'Bản xứ OS (de-DE)' : 'Google German Audio'}
+            {getTTSStatus().isNativeGermanVoice ? 'Bản xứ iOS (de-DE)' : 'Google German Audio'}
           </span>
         </div>
 
-        <p className="text-xs md:text-sm text-[#c4c7c5] leading-relaxed">
-          Tự động nhận diện giọng tiếng Đức bản xứ của máy (Siri, Anna, Marlene, Hedda, de-DE). Nếu thiết bị chưa có gói giọng Đức, hệ thống tự động phát âm thanh tiếng Đức bản xứ chuẩn, tuyệt đối không dùng giọng tiếng Anh.
+        <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
+          Tự động tối ưu giọng đọc tiếng Đức bản xứ trên iPhone (Siri, Anna, Marlene, de-DE). Đã kích hoạt cơ chế gỡ chặn âm thanh iOS (Audio Autoplay Unlock).
         </p>
 
         <Button
           variant="tonal"
           size="md"
           onClick={() => {
+            unlockAudio()
             playFeedback('click')
             speakGerman('Guten Tag! Herzlich willkommen bei Ambitieux Deutsch.', 1.0)
           }}
           style={{ borderRadius: 9999 }}
-          className="w-full text-xs md:text-sm font-semibold cursor-pointer h-12"
+          className="w-full text-xs sm:text-sm font-semibold cursor-pointer h-11 sm:h-12"
         >
           <Volume2 className="h-4 w-4 mr-2 text-[#c084fc]" />
-          Nghe thử phát âm tiếng Đức chuẩn (Guten Tag !)
+          Nghe thử phát âm tiếng Đức (Guten Tag !)
         </Button>
       </div>
 
       {/* Section 3: Nhắc nhở thông báo hàng ngày */}
-      <div style={cardStyle} className="p-6 md:p-7 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5 text-base font-bold text-white tracking-tight font-outfit">
-            <Bell className="h-5 w-5 text-[#fbbc04]" />
+      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
+            <Bell className="h-4 w-4 sm:h-5 sm:w-5 text-[#fbbc04]" />
             Nhắc nhở ôn tập định kỳ
           </div>
           {hasNotifPermission && (
@@ -365,8 +367,8 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
         </div>
 
         {!hasNotifPermission ? (
-          <div className="space-y-3">
-            <p className="text-xs md:text-sm text-[#c4c7c5] leading-relaxed">
+          <div className="space-y-2.5">
+            <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
               Cấp quyền thông báo để Ambitieux nhắc bạn vào ôn tập đúng khung giờ mỗi ngày, tránh quên từ vựng.
             </p>
             <Button
@@ -374,217 +376,164 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
               size="md"
               onClick={handleRequestNotif}
               style={{ borderRadius: 9999 }}
-              className="w-full text-xs md:text-sm cursor-pointer h-12"
+              className="w-full text-xs sm:text-sm cursor-pointer h-11 sm:h-12"
             >
               <Bell className="h-4 w-4 mr-1.5" />
-              Cho phép gửi thông báo
+              Kích hoạt thông báo trên iPhone / Trình duyệt
             </Button>
           </div>
         ) : (
-          <div className="space-y-3.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs md:text-sm text-[#e3e3e3] font-medium">Khung giờ nhắc học</span>
-              <div className="flex items-center gap-1.5">
-                <select
-                  value={reminderConfig.hour}
-                  onChange={(e) => handleTimeChange(Number(e.target.value), reminderConfig.minute)}
-                  style={{ borderRadius: 12 }}
-                  className="border border-[#444746] bg-[#282a2c] px-3 py-1.5 text-xs text-white"
-                >
-                  {Array.from({ length: 24 }).map((_, i) => (
-                    <option key={i} value={i}>
-                      {String(i).padStart(2, '0')}h
-                    </option>
-                  ))}
-                </select>
-                <span className="text-[#8e918f] font-bold">:</span>
-                <select
-                  value={reminderConfig.minute}
-                  onChange={(e) => handleTimeChange(reminderConfig.hour, Number(e.target.value))}
-                  style={{ borderRadius: 12 }}
-                  className="border border-[#444746] bg-[#282a2c] px-3 py-1.5 text-xs text-white"
-                >
-                  {[0, 15, 30, 45].map((m) => (
-                    <option key={m} value={m}>
-                      {String(m).padStart(2, '0')}m
-                    </option>
-                  ))}
-                </select>
-              </div>
+          <div className="space-y-3">
+            <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
+              Chọn khung giờ để nhận thông báo ôn từ vựng Goethe A1 hàng ngày:
+            </p>
+            <div className="flex items-center gap-2">
+              <select
+                value={reminderConfig.hour}
+                onChange={(e) => handleTimeChange(Number(e.target.value), reminderConfig.minute)}
+                className="bg-[#1e1f20] text-[#e3e3e3] border border-[#444746] rounded-full px-4 py-2 text-xs sm:text-sm focus:outline-none focus:border-[#a8c7fa]"
+              >
+                {Array.from({ length: 24 }, (_, i) => (
+                  <option key={i} value={i}>
+                    {i.toString().padStart(2, '0')}:00
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-[#c4c7c5]">mỗi ngày</span>
             </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                playFeedback('click')
-                sendNotification('Ambitieux - Zeit für Deutsch !', 'Đã đến giờ ôn tập 10 phút tiếng Đức Goethe A1 hôm nay!')
-              }}
-              style={{ borderRadius: 9999 }}
-              className="w-full text-xs text-[#c4c7c5] hover:text-white cursor-pointer h-10"
-            >
-              Thử nghiệm thông báo ngay
-            </Button>
           </div>
         )}
       </div>
 
-      {/* Section 4: Hướng dẫn cài đặt PWA trên iPhone Safari */}
-      <div style={cardStyle} className="p-6 md:p-7 space-y-4">
-        <div className="flex items-center gap-2.5 text-base font-bold text-white tracking-tight font-outfit">
-          <Smartphone className="h-5 w-5 text-[#34a853]" />
-          Chạy Offline 100% trên iPhone (PWA)
+      {/* Section 4: Quản trị kho từ (Khôi phục kho Goethe A1) */}
+      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4 border-[#8c1d18]/40">
+        <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
+          <Trash2 className="h-4 w-4 sm:h-5 sm:w-5 text-[#f2b8b5]" />
+          Quản trị & Khôi phục kho từ
         </div>
-        <p className="text-xs md:text-sm text-[#c4c7c5] leading-relaxed">
-          Để sử dụng toàn màn hình không có thanh địa chỉ Safari và chạy mượt mà ngay cả khi ngắt mạng:
+
+        <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
+          Khôi phục lại kho 474 từ vựng tiếng Đức chuẩn Goethe-Zertifikat A1 ban đầu hoặc xóa toàn bộ dữ liệu đang lưu trong IndexedDB.
         </p>
-        <ol
-          style={{ borderRadius: 20 }}
-          className="text-xs md:text-sm text-[#e3e3e3] space-y-2 list-decimal list-inside bg-[#282a2c]/60 p-4 border border-[#3c4043]/80 leading-relaxed"
-        >
-          <li>Mở ứng dụng trong trình duyệt <strong>Safari iOS</strong>.</li>
-          <li>Chạm vào biểu tượng <strong>Chia sẻ (Share)</strong> ở thanh dưới cùng.</li>
-          <li>Cuộn xuống và chọn <strong>\"Thêm vào MH chính\" (Add to Home Screen)</strong>.</li>
-          <li>Mở icon <strong>Ambitieux</strong> trên màn hình chính iPhone để trải nghiệm mượt mà không viền.</li>
-        </ol>
-      </div>
 
-      {/* Section 5: Quản trị & Khôi phục Seed Data */}
-      <div style={cardStyle} className="p-6 md:p-7 space-y-4">
-        <div className="text-base font-bold text-white tracking-tight font-outfit">
-          Quản trị kho từ vựng Goethe A1
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Button
-            variant="tonal"
-            size="md"
-            onClick={() => setIsResetConfirmOpen(true)}
-            style={{ borderRadius: 9999 }}
-            className="w-full text-xs md:text-sm text-[#c4c7c5] hover:text-white cursor-pointer h-12"
-          >
-            <Sparkles className="h-4 w-4 mr-1.5 text-[#a8c7fa]" />
-            Nạp lại kho từ Goethe A1
-          </Button>
-
+        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 pt-1">
           <Button
             variant="outline"
             size="md"
+            onClick={() => setIsResetConfirmOpen(true)}
+            style={{ borderRadius: 9999 }}
+            className="w-full text-xs sm:text-sm text-[#a8c7fa] border-[#004a77] hover:bg-[#004a77]/30 cursor-pointer h-11 sm:h-12"
+          >
+            <Sparkles className="h-4 w-4 mr-1.5" />
+            Khôi phục kho A1
+          </Button>
+
+          <Button
+            variant="destructive"
+            size="md"
             onClick={() => setIsClearConfirmOpen(true)}
             style={{ borderRadius: 9999 }}
-            className="w-full text-xs md:text-sm text-[#f2b8b5] hover:text-white border-[#8c1d18] hover:bg-[#8c1d18]/20 cursor-pointer h-12"
+            className="w-full text-xs sm:text-sm cursor-pointer h-11 sm:h-12"
           >
             <Trash2 className="h-4 w-4 mr-1.5" />
-            Xóa hết dữ liệu
+            Xóa toàn bộ từ
           </Button>
         </div>
       </div>
 
-      {/* Modal Paste Import */}
+      {/* Modal: Paste Text Table */}
       <Modal
         isOpen={isPasteModalOpen}
         onClose={() => setIsPasteModalOpen(false)}
-        title="Dán dữ liệu từ vựng tiếng Đức"
-        description="Dán văn bản phân tách bằng Tab hoặc Dấu phẩy (German | IPA | Nghĩa | Chủ đề | Ví dụ)"
+        title="Dán văn bản từ vựng (TSV / CSV)"
+        description="Dán danh sách từ phân tách bằng Tab hoặc dấu phẩy"
       >
         <form onSubmit={handlePasteImportSubmit} className="space-y-4 mt-2">
           <textarea
-            required
             rows={8}
             value={pasteContent}
             onChange={(e) => setPasteContent(e.target.value)}
-            placeholder={`hallo\t[ˈhalo]\txin chào\tgiao tiếp\tHallo, wie geht es dir?\ndanke\t[ˈdaŋkə]\tcảm ơn\tgiao tiếp\tDanke für deine Hilfe!`}
+            placeholder={`Guten Tag\t[ɡuːtn̩ ˈtaːk]\txin chào\tgiao tiếp\tGuten Tag!\tChào bạn!\nder Tisch\t[tɪʃ]\tcái bàn\tnhà ở\tDer Tisch ist neu.\tCái bàn mới.`}
             style={{ borderRadius: 20 }}
-            className="w-full border border-[#444746] bg-[#1e1f20] p-4 text-xs font-mono text-[#e3e3e3] focus:outline-none focus:ring-2 focus:ring-[#a8c7fa]/30"
+            className="w-full bg-[#1e1f20] border border-[#444746] p-4 text-xs sm:text-sm font-mono text-[#e3e3e3] focus:outline-none focus:border-[#a8c7fa]"
           />
-
-          <div className="flex gap-3">
+          <div className="flex justify-end gap-2">
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() => setIsPasteModalOpen(false)}
               style={{ borderRadius: 9999 }}
-              className="flex-1 cursor-pointer h-12"
             >
               Hủy
             </Button>
             <Button
               type="submit"
               variant="primary"
+              size="sm"
               style={{ borderRadius: 9999 }}
-              className="flex-1 font-semibold cursor-pointer h-12"
             >
-              Bắt đầu nạp
+              Bắt đầu nạp dữ liệu
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Modal Confirm Reset to Goethe A1 */}
+      {/* Confirmation Modal: Reset Default */}
       <Modal
         isOpen={isResetConfirmOpen}
         onClose={() => setIsResetConfirmOpen(false)}
-        title="Khôi phục kho từ Goethe-Zertifikat A1?"
+        title="Khôi phục 474 từ Goethe A1?"
+        description="Hành động này sẽ nạp lại toàn bộ kho 474 từ vựng chuẩn Goethe-Zertifikat A1 và đặt ngày ôn tập từ hôm nay."
       >
-        <div className="space-y-4">
-          <p className="text-sm text-[#c4c7c5]">
-            Hành động này sẽ khôi phục kho về bộ từ vựng <strong className="text-white">Goethe-Zertifikat A1: Start Deutsch 1</strong> chuẩn từ file <code className="text-[#a8c7fa]">vocab_goethe_a1.json</code>.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsResetConfirmOpen(false)}
-              style={{ borderRadius: 9999 }}
-              className="flex-1 cursor-pointer h-12"
-            >
-              Hủy
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              onClick={handleResetToDefault}
-              style={{ borderRadius: 9999 }}
-              className="flex-1 font-semibold cursor-pointer h-12"
-            >
-              Xác nhận nạp lại
-            </Button>
-          </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsResetConfirmOpen(false)}
+            style={{ borderRadius: 9999 }}
+          >
+            Hủy
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleResetToDefault}
+            style={{ borderRadius: 9999 }}
+          >
+            Đồng ý khôi phục
+          </Button>
         </div>
       </Modal>
 
-      {/* Modal Confirm Clear All */}
+      {/* Confirmation Modal: Clear All */}
       <Modal
         isOpen={isClearConfirmOpen}
         onClose={() => setIsClearConfirmOpen(false)}
-        title="Xóa toàn bộ kho từ vựng?"
+        title="Xóa toàn bộ dữ liệu?"
+        description="Hành động này sẽ xóa sạch tất cả các từ vựng hiện tại trong IndexedDB của bạn. Thao tác không thể hoàn tác!"
       >
-        <div className="space-y-4">
-          <p className="text-sm text-[#c4c7c5]">
-            Cảnh báo: Toàn bộ từ vựng và lịch sử ôn tập trong IndexedDB sẽ bị xóa sạch hoàn toàn.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsClearConfirmOpen(false)}
-              style={{ borderRadius: 9999 }}
-              className="flex-1 cursor-pointer h-12"
-            >
-              Hủy
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={handleClearAll}
-              style={{ borderRadius: 9999 }}
-              className="flex-1 font-semibold cursor-pointer h-12"
-            >
-              Xóa sạch
-            </Button>
-          </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsClearConfirmOpen(false)}
+            style={{ borderRadius: 9999 }}
+          >
+            Hủy
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleClearAll}
+            style={{ borderRadius: 9999 }}
+          >
+            Xác nhận xóa sạch
+          </Button>
         </div>
       </Modal>
     </div>
   )
 }
+
+export default SettingsView
