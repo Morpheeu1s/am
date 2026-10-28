@@ -1,0 +1,18 @@
+{
+  "name": "Ambitieux - Spaced Repetition Français A0-A1",
+  "short_name": "Ambitieux",
+  "description": "Ứng dụng học từ vựng Tiếng Pháp cá nhân tương tác cao, chạy offline 100% trên iPhone",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

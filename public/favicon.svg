@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18181b" />
+      <stop offset="100%" stop-color="#09090b" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="50%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#60a5fa" stop-opacity="0" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#4f46e5" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- iOS App Icon Squircle Background -->
+  <rect width="512" height="512" rx="115" fill="url(#bgGrad)" stroke="#27272a" stroke-width="6" />
+
+  <!-- Inner Subtle Border -->
+  <rect x="8" y="8" width="496" height="496" rx="107" fill="none" stroke="url(#glowGrad)" stroke-width="3" />
+
+  <!-- Center Glowing Emblem: The Ambitious 'A' + Flashcard / Wave -->
+  <g filter="url(#shadow)">
+    <!-- Stylized A -->
+    <path
+      d="M256 96 L144 384 H212 L236 316 H276 L300 384 H368 L256 96 Z M256 210 L266 260 H246 Z"
+      fill="url(#accentGrad)"
+    />
+    <!-- Spaced Repetition Orbital Arc -->
+    <path
+      d="M128 260 C128 170 384 170 384 260"
+      fill="none"
+      stroke="#38bdf8"
+      stroke-width="12"
+      stroke-linecap="round"
+      stroke-dasharray="8 16"
+      opacity="0.8"
+    />
+    <!-- Sparkles -->
+    <polygon points="370,130 380,150 400,160 380,170 370,190 360,170 340,160 360,150" fill="#facc15" />
+    <polygon points="130,340 136,352 148,358 136,364 130,376 124,364 112,358 124,352" fill="#38bdf8" />
+  </g>
+</svg>
