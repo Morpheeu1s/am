@@ -2,6 +2,7 @@ import Dexie, { type Table } from 'dexie'
 import type { Word, DeckStats } from '@/types'
 import vocabGoetheA1 from '@/data/vocab_goethe_a1.json'
 import { getTodayDateString } from '@/lib/srs'
+import { getSupabaseClient } from '@/lib/supabase'
 
 export class AmbitieuxDatabase extends Dexie {
   words!: Table<Word, number>
@@ -41,16 +42,75 @@ function normalizeWordEntry(item: Partial<Word> & { german?: string; french?: st
 /**
  * Check if words table is empty; if so, populate Goethe-Zertifikat A1 words
  * into the pool (repetition = 0).
+ * Syncs seamlessly with Supabase backend when online.
  */
 export async function initializeDefaultData(): Promise<void> {
+  const supabase = getSupabaseClient()
+  const today = getTodayDateString()
+
+  // 1. Try to sync with Supabase if online
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('words').select('*').limit(1000)
+      if (!error && data) {
+        if (data.length > 0) {
+          // Supabase has data: update local IndexedDB with cloud source of truth
+          const remoteWords: Word[] = data.map((remote) => ({
+            id: remote.id,
+            german: remote.german,
+            french: remote.german,
+            ipa: remote.ipa || '',
+            vietnamese: remote.vietnamese,
+            category: remote.category || 'chung',
+            example: remote.example || '',
+            exampleVi: remote.example_vi || '',
+            repetition: remote.repetition ?? 0,
+            interval: remote.interval ?? 0,
+            easeFactor: Number(remote.ease_factor) || 2.5,
+            dueDate: remote.due_date || today,
+            mistakes: remote.mistakes ?? 0
+          }))
+
+          await db.words.clear()
+          await db.words.bulkAdd(remoteWords)
+          return
+        } else {
+          // Supabase table exists but is empty -> auto seed to Supabase
+          const entries: Word[] = (vocabGoetheA1 as unknown as Partial<Word>[]).map((item) =>
+            normalizeWordEntry(item, today)
+          )
+          const payload = entries.map((w) => ({
+            german: w.german,
+            vietnamese: w.vietnamese,
+            ipa: w.ipa || '',
+            category: w.category || 'chung',
+            example: w.example || '',
+            example_vi: w.exampleVi || '',
+            repetition: 0,
+            interval: 0,
+            ease_factor: 2.5,
+            due_date: today,
+            mistakes: 0
+          }))
+          // Push in chunks
+          for (let i = 0; i < payload.length; i += 100) {
+            await supabase.from('words').upsert(payload.slice(i, i + 100), { onConflict: 'german' })
+          }
+        }
+      }
+    } catch {
+      // Supabase table not created yet or network unavailable, continue to local Dexie
+    }
+  }
+
+  // 2. Ensure local Dexie has data
   const count = await db.words.count()
   if (count === 0) {
-    const today = getTodayDateString()
     const entries: Word[] = (vocabGoetheA1 as unknown as Partial<Word>[]).map((item) =>
       normalizeWordEntry(item, today)
     )
     await db.words.bulkAdd(entries)
-    console.log(`Ambitieux: Seeded ${entries.length} Goethe A1 words successfully into the warehouse pool.`)
+    console.log(`Ambitieux: Seeded ${entries.length} Goethe A1 words locally.`)
   }
 }
 
@@ -125,7 +185,7 @@ export async function getCategories(): Promise<string[]> {
 }
 
 /**
- * Add a new word
+ * Add a new word (saves locally and syncs to Supabase)
  */
 export async function addWord(word: Omit<Word, 'id'>): Promise<number> {
   const today = getTodayDateString()
@@ -144,11 +204,32 @@ export async function addWord(word: Omit<Word, 'id'>): Promise<number> {
     mistakes: word.mistakes ?? 0,
     createdAt: word.createdAt || Date.now()
   }
-  return await db.words.add(wordWithDefaults)
+
+  const localId = await db.words.add(wordWithDefaults)
+
+  // Sync to Supabase
+  const supabase = getSupabaseClient()
+  if (supabase) {
+    supabase.from('words').upsert({
+      german: germanWord,
+      vietnamese: wordWithDefaults.vietnamese,
+      ipa: wordWithDefaults.ipa,
+      category: wordWithDefaults.category,
+      example: wordWithDefaults.example || '',
+      example_vi: wordWithDefaults.exampleVi || '',
+      repetition: wordWithDefaults.repetition,
+      interval: wordWithDefaults.interval,
+      ease_factor: wordWithDefaults.easeFactor,
+      due_date: wordWithDefaults.dueDate,
+      mistakes: wordWithDefaults.mistakes
+    }, { onConflict: 'german' }).then(() => {}, () => {})
+  }
+
+  return localId
 }
 
 /**
- * Update an existing word
+ * Update an existing word (updates locally and syncs to Supabase)
  */
 export async function updateWord(id: number, changes: Partial<Word>): Promise<number> {
   const updatedChanges = { ...changes }
@@ -157,14 +238,45 @@ export async function updateWord(id: number, changes: Partial<Word>): Promise<nu
   } else if (changes.french) {
     updatedChanges.german = changes.french
   }
-  return await db.words.update(id, updatedChanges)
+
+  const result = await db.words.update(id, updatedChanges)
+
+  // Sync update to Supabase
+  const supabase = getSupabaseClient()
+  if (supabase) {
+    const word = await db.words.get(id)
+    if (word) {
+      const updatePayload: Record<string, unknown> = {}
+      if (changes.repetition !== undefined) updatePayload.repetition = changes.repetition
+      if (changes.interval !== undefined) updatePayload.interval = changes.interval
+      if (changes.easeFactor !== undefined) updatePayload.ease_factor = changes.easeFactor
+      if (changes.dueDate !== undefined) updatePayload.due_date = changes.dueDate
+      if (changes.mistakes !== undefined) updatePayload.mistakes = changes.mistakes
+      if (changes.vietnamese !== undefined) updatePayload.vietnamese = changes.vietnamese
+      if (changes.german !== undefined) updatePayload.german = changes.german
+      if (changes.example !== undefined) updatePayload.example = changes.example
+      if (changes.exampleVi !== undefined) updatePayload.example_vi = changes.exampleVi
+      if (changes.category !== undefined) updatePayload.category = changes.category
+      if (changes.ipa !== undefined) updatePayload.ipa = changes.ipa
+
+      supabase.from('words').update(updatePayload).eq('german', word.german).then(() => {}, () => {})
+    }
+  }
+
+  return result
 }
 
 /**
- * Delete a word by id
+ * Delete a word by id (deletes locally and syncs to Supabase)
  */
 export async function deleteWord(id: number): Promise<void> {
+  const word = await db.words.get(id)
   await db.words.delete(id)
+
+  const supabase = getSupabaseClient()
+  if (supabase && word) {
+    supabase.from('words').delete().eq('german', word.german).then(() => {}, () => {})
+  }
 }
 
 /**
@@ -203,6 +315,25 @@ export async function bulkAddWords(words: Omit<Word, 'id'>[]): Promise<number> {
 
   if (toAdd.length > 0) {
     await db.words.bulkAdd(toAdd)
+
+    // Sync to Supabase
+    const supabase = getSupabaseClient()
+    if (supabase) {
+      const payload = toAdd.map((w) => ({
+        german: w.german,
+        vietnamese: w.vietnamese,
+        ipa: w.ipa || '',
+        category: w.category || 'chung',
+        example: w.example || '',
+        example_vi: w.exampleVi || '',
+        repetition: w.repetition,
+        interval: w.interval,
+        ease_factor: w.easeFactor,
+        due_date: w.dueDate,
+        mistakes: w.mistakes
+      }))
+      supabase.from('words').upsert(payload, { onConflict: 'german' }).then(() => {}, () => {})
+    }
   }
   return toAdd.length
 }
@@ -273,6 +404,26 @@ export async function resetDatabaseToDefault(): Promise<void> {
     normalizeWordEntry(item, today)
   )
   await db.words.bulkAdd(entries)
+
+  const supabase = getSupabaseClient()
+  if (supabase) {
+    const payload = entries.map((w) => ({
+      german: w.german,
+      vietnamese: w.vietnamese,
+      ipa: w.ipa || '',
+      category: w.category || 'chung',
+      example: w.example || '',
+      example_vi: w.exampleVi || '',
+      repetition: 0,
+      interval: 0,
+      ease_factor: 2.5,
+      due_date: today,
+      mistakes: 0
+    }))
+    for (let i = 0; i < payload.length; i += 100) {
+      await supabase.from('words').upsert(payload.slice(i, i + 100), { onConflict: 'german' }).then(() => {}, () => {})
+    }
+  }
 }
 
 // Backward compatibility alias

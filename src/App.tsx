@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   BookOpen,
+  BarChart3,
   Layers,
   Settings,
   Sparkles,
@@ -22,11 +23,12 @@ import { getStudyConfig } from '@/lib/srs'
 import { playFeedback, unlockAudio } from '@/lib/audio'
 import { speakGerman } from '@/lib/speech'
 import { StudyView } from '@/components/study/StudyView'
+import { StatsView } from '@/components/stats/StatsView'
 import { VocabularyManager } from '@/components/manager/VocabularyManager'
 import { SettingsView } from '@/components/settings/SettingsView'
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'study' | 'manager' | 'settings'>('study')
+  const [activeTab, setActiveTab] = useState<'study' | 'stats' | 'manager' | 'settings'>('study')
   const [isLoading, setIsLoading] = useState(true)
 
   // Configuration
@@ -127,7 +129,7 @@ export function App() {
     }
   }, [studyConfig.newWordsPerBatch])
 
-  const handleTabChange = (tab: 'study' | 'manager' | 'settings') => {
+  const handleTabChange = (tab: 'study' | 'stats' | 'manager' | 'settings') => {
     unlockAudio()
     playFeedback('click')
     setActiveTab(tab)
@@ -136,7 +138,7 @@ export function App() {
   return (
     <div className="min-h-[100dvh] w-full bg-[#131314] text-[#e3e3e3] flex flex-col justify-between selection:bg-[#a8c7fa] selection:text-[#041e49] overflow-x-hidden">
       {/* Material 3 Top App Bar (Optimized for iPhone 16 Dynamic Island & 393px width) */}
-      <header className="sticky top-0 z-40 bg-[#131314]/95 backdrop-blur-xl border-b border-[#303336] px-3.5 sm:px-5 md:px-6 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2.5">
+      <header className="sticky top-0 z-40 bg-[#131314]/95 backdrop-blur-xl border-b border-[#303336] px-3 sm:px-5 md:px-6 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2.5">
         <div className="max-w-xl md:max-w-2xl mx-auto flex items-center justify-between gap-2">
           {/* Logo & Labs Title */}
           <div className="flex items-center gap-2.5 min-w-0">
@@ -250,6 +252,13 @@ export function App() {
               />
             )}
 
+            {activeTab === 'stats' && (
+              <StatsView
+                words={allWords}
+                onSwitchToStudy={() => setActiveTab('study')}
+              />
+            )}
+
             {activeTab === 'manager' && (
               <VocabularyManager
                 words={allWords}
@@ -267,17 +276,17 @@ export function App() {
         )}
       </main>
 
-      {/* Material 3 Bottom Navigation (Safe area bottom for iPhone 16 Home Indicator) */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#131314]/95 backdrop-blur-xl border-t border-[#303336] pb-[max(env(safe-area-inset-bottom),0.65rem)] pt-1.5 px-4 sm:px-6">
+      {/* Material 3 Bottom Navigation - 4 Tabs with Active Pill Indicator */}
+      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#131314]/95 backdrop-blur-xl border-t border-[#303336] pb-[max(env(safe-area-inset-bottom),0.65rem)] pt-1.5 px-2 sm:px-6">
         <div className="max-w-md mx-auto flex items-center justify-around">
           {/* Tab 1: Học tập */}
           <button
             onClick={() => handleTabChange('study')}
-            className="flex flex-col items-center gap-1 py-0.5 px-3 cursor-pointer group focus:outline-none"
+            className="flex flex-col items-center gap-1 py-0.5 px-2 cursor-pointer group focus:outline-none"
           >
             <div
               style={{ borderRadius: 9999 }}
-              className={`flex items-center justify-center h-8 w-14 sm:w-16 transition-all duration-200 ${
+              className={`flex items-center justify-center h-8 w-12 sm:w-14 transition-all duration-200 ${
                 activeTab === 'study'
                   ? 'bg-[#004a77] text-[#c2e7ff]'
                   : 'text-[#c4c7c5] group-hover:bg-[#282a2c]/60 group-hover:text-white'
@@ -294,14 +303,38 @@ export function App() {
             </span>
           </button>
 
-          {/* Tab 2: Kho từ */}
+          {/* Tab 2: Thống kê */}
           <button
-            onClick={() => handleTabChange('manager')}
-            className="flex flex-col items-center gap-1 py-0.5 px-3 cursor-pointer group focus:outline-none"
+            onClick={() => handleTabChange('stats')}
+            className="flex flex-col items-center gap-1 py-0.5 px-2 cursor-pointer group focus:outline-none"
           >
             <div
               style={{ borderRadius: 9999 }}
-              className={`flex items-center justify-center h-8 w-14 sm:w-16 transition-all duration-200 ${
+              className={`flex items-center justify-center h-8 w-12 sm:w-14 transition-all duration-200 ${
+                activeTab === 'stats'
+                  ? 'bg-[#004a77] text-[#c2e7ff]'
+                  : 'text-[#c4c7c5] group-hover:bg-[#282a2c]/60 group-hover:text-white'
+              }`}
+            >
+              <BarChart3 className="h-4 w-4 sm:h-5 sm:w-5" />
+            </div>
+            <span
+              className={`text-[10px] sm:text-[11px] font-medium transition-colors ${
+                activeTab === 'stats' ? 'text-[#c2e7ff] font-bold' : 'text-[#c4c7c5]'
+              }`}
+            >
+              Thống kê
+            </span>
+          </button>
+
+          {/* Tab 3: Kho từ */}
+          <button
+            onClick={() => handleTabChange('manager')}
+            className="flex flex-col items-center gap-1 py-0.5 px-2 cursor-pointer group focus:outline-none"
+          >
+            <div
+              style={{ borderRadius: 9999 }}
+              className={`flex items-center justify-center h-8 w-12 sm:w-14 transition-all duration-200 ${
                 activeTab === 'manager'
                   ? 'bg-[#004a77] text-[#c2e7ff]'
                   : 'text-[#c4c7c5] group-hover:bg-[#282a2c]/60 group-hover:text-white'
@@ -318,14 +351,14 @@ export function App() {
             </span>
           </button>
 
-          {/* Tab 3: Cài đặt */}
+          {/* Tab 4: Cài đặt */}
           <button
             onClick={() => handleTabChange('settings')}
-            className="flex flex-col items-center gap-1 py-0.5 px-3 cursor-pointer group focus:outline-none"
+            className="flex flex-col items-center gap-1 py-0.5 px-2 cursor-pointer group focus:outline-none"
           >
             <div
               style={{ borderRadius: 9999 }}
-              className={`flex items-center justify-center h-8 w-14 sm:w-16 transition-all duration-200 ${
+              className={`flex items-center justify-center h-8 w-12 sm:w-14 transition-all duration-200 ${
                 activeTab === 'settings'
                   ? 'bg-[#004a77] text-[#c2e7ff]'
                   : 'text-[#c4c7c5] group-hover:bg-[#282a2c]/60 group-hover:text-white'

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import {
   Upload,
   Download,
@@ -9,7 +9,13 @@ import {
   FileText,
   Trash2,
   Sparkles,
-  Sliders
+  Sliders,
+  Cloud,
+  CloudUpload,
+  CloudDownload,
+  Check,
+  BookOpen,
+  HelpCircle
 } from 'lucide-react'
 import type { Word, StudyConfig } from '@/types'
 import {
@@ -31,8 +37,18 @@ import {
 import { getStudyConfig, saveStudyConfig } from '@/lib/srs'
 import { playFeedback, unlockAudio } from '@/lib/audio'
 import { speakGerman, getTTSStatus } from '@/lib/speech'
+import {
+  getSupabaseCredentials,
+  saveSupabaseCredentials,
+  clearSupabaseCredentials,
+  testSupabaseConnection,
+  pushLocalToSupabase,
+  pullSupabaseToLocal
+} from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Modal } from '@/components/ui/modal'
+import { DataFormatGuideModal } from '@/components/docs/DataFormatGuideModal'
 
 interface SettingsViewProps {
   words: Word[]
@@ -45,6 +61,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
 
   // Import state
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false)
+  const [isGuideModalOpen, setIsGuideModalOpen] = useState(false)
   const [pasteContent, setPasteContent] = useState('')
   const [importStatusMessage, setImportStatusMessage] = useState<string | null>(null)
 
@@ -52,11 +69,31 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
   const [hasNotifPermission, setHasNotifPermission] = useState(isNotificationGranted())
   const [reminderConfig, setReminderConfig] = useState<ReminderConfig>(getReminderConfig())
 
+  // Supabase state with lazy initializer
+  const [supabaseUrl, setSupabaseUrl] = useState(() => getSupabaseCredentials().url)
+  const [supabaseKey, setSupabaseKey] = useState(() => getSupabaseCredentials().key)
+  const [supabaseStatus, setSupabaseStatus] = useState<{
+    connected: boolean
+    message: string
+  }>({ connected: false, message: '' })
+  const [isTestingSupabase, setIsTestingSupabase] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+
   // Reset confirmation
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false)
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Test Supabase connection on mount if credentials already exist
+  useEffect(() => {
+    const creds = getSupabaseCredentials()
+    if (creds.url && creds.key) {
+      testSupabaseConnection().then((res) => {
+        setSupabaseStatus({ connected: res.success, message: res.message })
+      })
+    }
+  }, [])
 
   const handleBatchSizeChange = (size: number) => {
     unlockAudio()
@@ -153,6 +190,66 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
     saveReminderConfig(updated)
   }
 
+  // Supabase Save & Test
+  const handleSaveSupabase = async () => {
+    playFeedback('click')
+    saveSupabaseCredentials(supabaseUrl, supabaseKey)
+    setIsTestingSupabase(true)
+    const res = await testSupabaseConnection()
+    setIsTestingSupabase(false)
+    setSupabaseStatus({ connected: res.success, message: res.message })
+    if (res.success) {
+      playFeedback('success')
+    } else {
+      playFeedback('error')
+    }
+  }
+
+  const handleDisconnectSupabase = () => {
+    playFeedback('pop')
+    clearSupabaseCredentials()
+    setSupabaseUrl('')
+    setSupabaseKey('')
+    setSupabaseStatus({ connected: false, message: 'Đã hủy liên kết với Supabase' })
+  }
+
+  const handlePushToSupabase = async () => {
+    if (!supabaseStatus.connected) {
+      alert('Vui lòng lưu và kết nối thành công với Supabase trước khi đồng bộ.')
+      return
+    }
+    setIsSyncing(true)
+    playFeedback('click')
+    const res = await pushLocalToSupabase()
+    setIsSyncing(false)
+    if (res.error) {
+      alert(`Đồng bộ thất bại: ${res.error}`)
+    } else {
+      playFeedback('success')
+      setImportStatusMessage(`Đã đồng bộ ${res.count} từ vựng lên Supabase Cloud!`)
+      setTimeout(() => setImportStatusMessage(null), 4000)
+    }
+  }
+
+  const handlePullFromSupabase = async () => {
+    if (!supabaseStatus.connected) {
+      alert('Vui lòng lưu và kết nối thành công với Supabase trước khi đồng bộ.')
+      return
+    }
+    setIsSyncing(true)
+    playFeedback('click')
+    const res = await pullSupabaseToLocal()
+    setIsSyncing(false)
+    if (res.error) {
+      alert(`Tải về thất bại: ${res.error}`)
+    } else {
+      playFeedback('success')
+      onDataRefresh()
+      setImportStatusMessage(`Đã cập nhật ${res.count} từ vựng từ Supabase về thiết bị!`)
+      setTimeout(() => setImportStatusMessage(null), 4000)
+    }
+  }
+
   // Reset to default Goethe-Zertifikat A1 words
   const handleResetToDefault = async () => {
     unlockAudio()
@@ -228,18 +325,152 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
         </div>
       </div>
 
-      {/* Section 1: Nạp & Xuất dữ liệu */}
-      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
-        <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
-          <Database className="h-4 w-4 sm:h-5 sm:w-5 text-[#a8c7fa]" />
-          Dữ liệu & Đồng bộ (Anki / CSV)
+      {/* Section 1: Backend Supabase Cloud Sync */}
+      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4 border-[#34a853]/30">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
+            <Cloud className="h-4 w-4 sm:h-5 sm:w-5 text-[#34a853]" />
+            Supabase Backend & Cloud Sync
+          </div>
+          <span
+            style={{ borderRadius: 9999 }}
+            className={`text-[10px] sm:text-xs font-semibold px-2.5 py-0.5 border ${
+              supabaseStatus.connected
+                ? 'bg-[#0f5223]/60 text-[#c4eed0] border-[#34a853]'
+                : 'bg-[#282a2c] text-[#8e918f] border-[#444746]'
+            }`}
+          >
+            {supabaseStatus.connected ? '🟢 Đã kết nối Supabase' : '⚪ Chưa kết nối'}
+          </span>
         </div>
 
         <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
-          Tương thích hoàn toàn với bộ thẻ Anki (.txt, .tsv) và bảng tính CSV (, hoặc ;). Toàn bộ dữ liệu được lưu trữ 100% nội bộ trên trình duyệt (IndexedDB) của bạn.
+          Đồng bộ tiến độ học hai chiều giữa iPhone và Backend Supabase (PostgreSQL). Sẵn sàng mở rộng sang học ngữ pháp, bài tập tương tác và đăng nhập đa thiết bị.
         </p>
 
-        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 pt-1">
+        {/* URL and Anon Key Inputs */}
+        <div className="space-y-2.5 pt-1">
+          <div>
+            <label className="text-[11px] sm:text-xs font-medium text-[#c4c7c5] mb-1 block">
+              Supabase Project URL
+            </label>
+            <Input
+              value={supabaseUrl}
+              onChange={(e) => setSupabaseUrl(e.target.value)}
+              placeholder="https://xyzcompany.supabase.co"
+              className="h-11 text-xs sm:text-sm font-mono bg-[#131314]"
+            />
+          </div>
+
+          <div>
+            <label className="text-[11px] sm:text-xs font-medium text-[#c4c7c5] mb-1 block">
+              Supabase Public Anon Key
+            </label>
+            <Input
+              type="password"
+              value={supabaseKey}
+              onChange={(e) => setSupabaseKey(e.target.value)}
+              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+              className="h-11 text-xs sm:text-sm font-mono bg-[#131314]"
+            />
+          </div>
+
+          {/* Connection Status feedback */}
+          {supabaseStatus.message && (
+            <div
+              className={`text-xs p-2.5 rounded-xl border ${
+                supabaseStatus.connected
+                  ? 'bg-[#0f5223]/30 text-[#c4eed0] border-[#34a853]/50'
+                  : 'bg-[#5c3e00]/30 text-[#ffe082] border-[#f29900]/50'
+              }`}
+            >
+              {supabaseStatus.message}
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="flex gap-2 pt-1 flex-wrap">
+            <Button
+              variant="primary"
+              size="md"
+              disabled={isTestingSupabase}
+              onClick={handleSaveSupabase}
+              style={{ borderRadius: 9999 }}
+              className="flex-1 text-xs sm:text-sm h-11 cursor-pointer"
+            >
+              <Check className="h-4 w-4 mr-1.5" />
+              {isTestingSupabase ? 'Đang kiểm tra...' : 'Lưu & Kết nối'}
+            </Button>
+
+            {supabaseStatus.connected && (
+              <Button
+                variant="outline"
+                size="md"
+                onClick={handleDisconnectSupabase}
+                style={{ borderRadius: 9999 }}
+                className="text-xs sm:text-sm h-11 text-[#8e918f] cursor-pointer"
+              >
+                Hủy liên kết
+              </Button>
+            )}
+          </div>
+
+          {/* Cloud Sync Buttons */}
+          {supabaseStatus.connected && (
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#3c4043]/60">
+              <Button
+                variant="tonal"
+                size="md"
+                disabled={isSyncing}
+                onClick={handlePushToSupabase}
+                style={{ borderRadius: 9999 }}
+                className="w-full text-xs sm:text-sm h-11 cursor-pointer"
+              >
+                <CloudUpload className="h-4 w-4 mr-1.5 text-[#34a853]" />
+                Đồng bộ lên Cloud
+              </Button>
+
+              <Button
+                variant="tonal"
+                size="md"
+                disabled={isSyncing}
+                onClick={handlePullFromSupabase}
+                style={{ borderRadius: 9999 }}
+                className="w-full text-xs sm:text-sm h-11 cursor-pointer"
+              >
+                <CloudDownload className="h-4 w-4 mr-1.5 text-[#a8c7fa]" />
+                Tải từ Cloud về
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Section 2: Nạp & Xuất dữ liệu nội bộ */}
+      <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
+            <Database className="h-4 w-4 sm:h-5 sm:w-5 text-[#a8c7fa]" />
+            Dữ liệu & Đồng bộ (Anki / CSV / Supabase)
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              playFeedback('click')
+              setIsGuideModalOpen(true)
+            }}
+            className="text-xs text-[#a8c7fa] hover:text-[#c2e7ff] flex items-center gap-1 font-medium cursor-pointer"
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            <span>Xem chuẩn định dạng</span>
+          </button>
+        </div>
+
+        <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed">
+          Tương thích hoàn toàn với bộ thẻ Anki (.txt, .tsv), bảng tính CSV (, hoặc ;) và định dạng JSON / SQL Supabase.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3 pt-1">
           <input
             type="file"
             ref={fileInputRef}
@@ -268,6 +499,20 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
           >
             <FileText className="h-4 w-4 mr-1.5 text-[#c4eed0]" />
             Dán bảng Text
+          </Button>
+
+          <Button
+            variant="outline"
+            size="md"
+            onClick={() => {
+              playFeedback('click')
+              setIsGuideModalOpen(true)
+            }}
+            style={{ borderRadius: 9999 }}
+            className="w-full text-xs sm:text-sm cursor-pointer h-11 sm:h-12 border-[#a8c7fa]/40 text-[#a8c7fa] hover:bg-[#a8c7fa]/10"
+          >
+            <BookOpen className="h-4 w-4 mr-1.5" />
+            Hướng dẫn format
           </Button>
         </div>
 
@@ -309,7 +554,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
         </div>
       </div>
 
-      {/* Section 2: Phát âm tiếng Đức chuẩn tốc độ 1.0 */}
+      {/* Section 3: Phát âm tiếng Đức chuẩn tốc độ 1.0 */}
       <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
@@ -339,12 +584,12 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
           style={{ borderRadius: 9999 }}
           className="w-full text-xs sm:text-sm font-semibold cursor-pointer h-11 sm:h-12"
         >
-          <Volume2 className="h-4 w-4 mr-2 text-[#c084fc]" />
+          <Volume2 className="h-4 w-4 mr-2 text-[#c084fc] text-[#c084fc]" />
           Nghe thử phát âm tiếng Đức (Guten Tag !)
         </Button>
       </div>
 
-      {/* Section 3: Nhắc nhở thông báo hàng ngày */}
+      {/* Section 4: Nhắc nhở thông báo hàng ngày */}
       <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
@@ -405,7 +650,7 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
         )}
       </div>
 
-      {/* Section 4: Quản trị kho từ (Khôi phục kho Goethe A1) */}
+      {/* Section 5: Quản trị kho từ (Khôi phục kho Goethe A1) */}
       <div style={cardStyle} className="p-4 sm:p-6 md:p-7 space-y-3.5 sm:space-y-4 border-[#8c1d18]/40">
         <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-white tracking-tight font-outfit">
           <Trash2 className="h-4 w-4 sm:h-5 sm:w-5 text-[#f2b8b5]" />
@@ -449,6 +694,17 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
         description="Dán danh sách từ phân tách bằng Tab hoặc dấu phẩy"
       >
         <form onSubmit={handlePasteImportSubmit} className="space-y-4 mt-2">
+          <div className="flex items-center justify-between text-xs text-[#8e918f]">
+            <span>Hỗ trợ Tab (\t), dấu phẩy (,), chấm phẩy (;)</span>
+            <button
+              type="button"
+              onClick={() => setIsGuideModalOpen(true)}
+              className="text-[#a8c7fa] hover:underline flex items-center gap-1 cursor-pointer font-medium"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              Xem format mẫu
+            </button>
+          </div>
           <textarea
             rows={8}
             value={pasteContent}
@@ -532,6 +788,12 @@ export function SettingsView({ words, onDataRefresh }: SettingsViewProps) {
           </Button>
         </div>
       </Modal>
+
+      {/* In-App Data Format Guide Modal */}
+      <DataFormatGuideModal
+        isOpen={isGuideModalOpen}
+        onClose={() => setIsGuideModalOpen(false)}
+      />
     </div>
   )
 }

@@ -6,7 +6,8 @@ import {
   Trash2,
   Edit2,
   Calendar,
-  Layers
+  Layers,
+  BookOpen
 } from 'lucide-react'
 import type { Word } from '@/types'
 import { addWord, updateWord, deleteWord } from '@/lib/db'
@@ -17,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Modal } from '@/components/ui/modal'
+import { DataFormatGuideModal } from '@/components/docs/DataFormatGuideModal'
 
 interface VocabularyManagerProps {
   words: Word[]
@@ -34,6 +36,7 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [isGuideModalOpen, setIsGuideModalOpen] = useState(false)
   const [editingWord, setEditingWord] = useState<Word | null>(null)
   const [deleteConfirmWord, setDeleteConfirmWord] = useState<Word | null>(null)
 
@@ -192,8 +195,8 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
 
   return (
     <div className="w-full max-w-xl md:max-w-2xl mx-auto space-y-4 pb-16">
-      {/* Material 3 Search Bar & Extended Action Button */}
-      <div className="flex items-center gap-2.5">
+      {/* Material 3 Search Bar & Extended Action Buttons */}
+      <div className="flex items-center gap-2 sm:gap-2.5">
         <div className="relative flex-1">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-[#a8c7fa]" />
           <Input
@@ -203,15 +206,31 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
             className="pl-11 h-12 text-sm bg-[#1e1f20] border-[#444746] focus-visible:border-[#a8c7fa]"
           />
         </div>
+
+        <Button
+          variant="outline"
+          size="md"
+          onClick={() => {
+            playFeedback('click')
+            setIsGuideModalOpen(true)
+          }}
+          style={{ borderRadius: 9999 }}
+          className="h-12 px-3 sm:px-4 shrink-0 border-[#444746] text-[#c4c7c5] hover:text-white cursor-pointer"
+          title="Xem hướng dẫn format dữ liệu chuẩn"
+        >
+          <BookOpen className="h-4 w-4 sm:mr-1.5 text-[#a8c7fa]" />
+          <span className="hidden sm:inline text-xs font-medium">Chuẩn format</span>
+        </Button>
+
         <Button
           variant="primary"
           size="md"
           onClick={handleOpenAddModal}
           style={{ borderRadius: 9999 }}
-          className="h-12 px-5 shrink-0 shadow-md shadow-blue-500/20 cursor-pointer"
+          className="h-12 px-4 sm:px-5 shrink-0 shadow-md shadow-blue-500/20 cursor-pointer"
         >
-          <Plus className="h-4 w-4 mr-1.5" />
-          Thêm từ
+          <Plus className="h-4 w-4 mr-1 sm:mr-1.5" />
+          <span>Thêm từ</span>
         </Button>
       </div>
 
@@ -269,7 +288,7 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
           style={{ borderRadius: 9999 }}
           className={`py-1.5 px-3.5 font-medium whitespace-nowrap transition-all cursor-pointer ${
             selectedFilter === 'lvl2'
-              ? 'bg-[#394457] text-[#d3e3fd] font-semibold shadow-sm'
+              ? 'bg-[#004a77] text-[#c2e7ff] font-semibold shadow-sm'
               : 'text-[#c4c7c5] hover:text-white hover:bg-[#282a2c]'
           }`}
         >
@@ -280,7 +299,7 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
           style={{ borderRadius: 9999 }}
           className={`py-1.5 px-3.5 font-medium whitespace-nowrap transition-all cursor-pointer ${
             selectedFilter === 'lvl3'
-              ? 'bg-[#5c3e00] text-[#ffe082] font-semibold shadow-sm'
+              ? 'bg-[#004a77] text-[#c2e7ff] font-semibold shadow-sm'
               : 'text-[#c4c7c5] hover:text-white hover:bg-[#282a2c]'
           }`}
         >
@@ -295,7 +314,7 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
               : 'text-[#c4c7c5] hover:text-white hover:bg-[#282a2c]'
           }`}
         >
-          Lvl 4 Master ({counts.lvl4})
+          Thành thạo ({counts.lvl4})
         </button>
       </div>
 
@@ -471,6 +490,18 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
         description="Điền thông tin từ vựng tiếng Đức để đưa vào kho từ SM-2"
       >
         <form onSubmit={handleSaveAdd} className="space-y-4 mt-2">
+          {/* Format helper tip */}
+          <div className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-[#004a77]/20 border border-[#004a77]/50 text-[#c2e7ff]">
+            <span>💡 Danh từ tiếng Đức bắt buộc viết hoa và kèm quán từ (der/die/das).</span>
+            <button
+              type="button"
+              onClick={() => setIsGuideModalOpen(true)}
+              className="text-[#a8c7fa] hover:underline font-semibold cursor-pointer shrink-0 ml-2"
+            >
+              Xem mẫu chuẩn
+            </button>
+          </div>
+
           <div>
             <label className="text-xs font-medium text-[#c4c7c5] mb-1.5 block">
               Từ / Cụm từ tiếng Đức *
@@ -742,6 +773,12 @@ export function VocabularyManager({ words, onWordListChange }: VocabularyManager
           </div>
         </div>
       </Modal>
+
+      {/* In-App Data Format Guide Modal */}
+      <DataFormatGuideModal
+        isOpen={isGuideModalOpen}
+        onClose={() => setIsGuideModalOpen(false)}
+      />
     </div>
   )
 }
