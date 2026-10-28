@@ -17,8 +17,24 @@ export interface Word {
 
 export type ReviewQuality = 0 | 1 | 2 | 3 | 4 | 5
 
-// Auto-mixed exercise types (inspired by 4English / Duolingo / Anki)
-export type ExerciseType = 'new_intro' | 'choice' | 'dictee' | 'reverse' | 'cloze'
+// Multi-modal interactive exercise types (5 distinct stages per word)
+export type ExerciseType =
+  | 'new_intro'
+  | 'choice'           // Đức ➜ Việt (Trắc nghiệm chọn nghĩa tiếng Việt)
+  | 'reverse_choice'   // Việt ➜ Đức (Trắc nghiệm chọn từ tiếng Đức từ nghĩa Việt)
+  | 'article_quiz'     // Chọn mạo từ chuẩn der / die / das cho danh từ
+  | 'listening_choice' // Nghe âm thanh ➜ Chọn nghĩa đúng
+  | 'scramble'         // Xếp mảnh chữ / ký tự (Duolingo style)
+  | 'reverse'          // Dịch ngược Việt ➜ Gõ từ tiếng Đức
+  | 'dictee'           // Nghe phát âm ➜ Chép chính tả tiếng Đức
+  | 'cloze'            // Điền từ tiếng Đức còn thiếu vào câu ngữ cảnh
+
+export interface StudyTask {
+  word: Word
+  exerciseType: ExerciseType
+  round: number // 1 to 4
+  totalRounds: number // 4
+}
 
 export interface SRSResult {
   repetition: number

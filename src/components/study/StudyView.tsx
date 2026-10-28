@@ -13,14 +13,21 @@ import {
   Languages,
   Play,
   PlusCircle,
-  Check
+  Check,
+  CheckCheck,
+  Puzzle
 } from 'lucide-react'
-import type { Word, ReviewQuality, ExerciseType } from '@/types'
-import { updateSRS, getIntervalPreview, getMasteryInfo } from '@/lib/srs'
+import type { Word, ReviewQuality, StudyTask } from '@/types'
+import { updateSRS, getMasteryInfo } from '@/lib/srs'
 import { updateWord } from '@/lib/db'
 import { speakGerman, unlockAudio } from '@/lib/speech'
 import { playFeedback } from '@/lib/audio'
 import { evaluateAnswer, maskSentence } from '@/lib/fuzzy'
+import {
+  buildInterleavedStudyTasks,
+  getGermanArticleAndNoun,
+  generateScrambleTiles
+} from '@/lib/studyQueue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -33,7 +40,6 @@ interface StudyViewProps {
   onLoadMoreNewWords?: () => Promise<Word[]> | void
 }
 
-// German specific Umlauts and Eszett
 const GERMAN_UMLAUTS = ['ä', 'ö', 'ü', 'ß', 'Ä', 'Ö', 'Ü']
 
 export function StudyView({
@@ -42,65 +48,75 @@ export function StudyView({
   onSessionComplete,
   onLoadMoreNewWords
 }: StudyViewProps) {
-  // Session queue
-  const [queue, setQueue] = useState<Word[]>(() => [...initialWords])
+  // Generate 4-repetition interleaved tasks queue
+  const [tasks, setTasks] = useState<StudyTask[]>(() => buildInterleavedStudyTasks(initialWords))
   const [prevInitialWords, setPrevInitialWords] = useState(initialWords)
   const [currentIndex, setCurrentIndex] = useState(0)
-  const [completedCount, setCompletedCount] = useState(0)
-  const [totalInitialCount, setTotalInitialCount] = useState(initialWords.length)
+  const [completedTasksCount, setCompletedTasksCount] = useState(0)
 
-  // Session state: 'overview' (pre-session summary) | 'active'
+  // Track mistakes per word ID in this session to accurately score SM-2 quality at the end
+  const [wordMistakesMap, setWordMistakesMap] = useState<Record<number, number>>({})
+
+  // Session state: 'overview' | 'active'
   const [sessionState, setSessionState] = useState<'overview' | 'active'>('overview')
   const [isLoadingMore, setIsLoadingMore] = useState(false)
 
-  // Answer state for typing & interaction
+  // Answer interaction states
   const [userInput, setUserInput] = useState('')
-  const [isIntroDismissed, setIsIntroDismissed] = useState(false)
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false)
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false)
   const [fuzzyStatus, setFuzzyStatus] = useState<'idle' | 'correct' | 'typo' | 'incorrect'>('idle')
   const [fuzzyMessage, setFuzzyMessage] = useState('')
 
-  // Selected option for multiple choice
+  // Selected option for multiple choice / listening choice / reverse choice
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null)
 
-  const inputRef = useRef<HTMLInputElement>(null)
-  const currentWord = queue[currentIndex]
-  const currentGerman = currentWord ? (currentWord.german || currentWord.french || '') : ''
+  // Selected article for Article Quiz ('der' | 'die' | 'das')
+  const [selectedArticle, setSelectedArticle] = useState<'der' | 'die' | 'das' | null>(null)
 
-  // Sync state if initialWords reference changed externally
+  // Scramble tiles state (Duolingo tile puzzle)
+  const [selectedTileIds, setSelectedTileIds] = useState<number[]>([])
+
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Current active task and word
+  const currentTask = tasks[currentIndex]
+  const currentWord = currentTask?.word
+  const currentGerman = currentWord ? (currentWord.german || currentWord.french || '').trim() : ''
+  const exerciseType = currentTask?.exerciseType || 'choice'
+
+  // Reset/sync when initialWords prop changes externally
   if (initialWords !== prevInitialWords) {
     setPrevInitialWords(initialWords)
-    setQueue([...initialWords])
-    setTotalInitialCount(initialWords.length)
+    const newTasks = buildInterleavedStudyTasks(initialWords)
+    setTasks(newTasks)
     setCurrentIndex(0)
-    setCompletedCount(0)
-    setIsIntroDismissed(false)
+    setCompletedTasksCount(0)
+    setWordMistakesMap({})
   }
 
-  // Automated mixed exercise assignment (inspired by 4English):
-  // - Level 0 brand new card that hasn't been acknowledged: 'new_intro' (discover first)
-  // - Other cards automatically rotate through 'choice', 'dictee', 'reverse', 'cloze'
-  const exerciseType = useMemo<ExerciseType>(() => {
-    if (!currentWord) return 'choice'
-    const rep = currentWord.repetition ?? 0
+  // Pure derived scramble tiles without setState in useEffect
+  const allScrambleTiles = useMemo<{ id: number; text: string }[]>(() => {
+    if (exerciseType !== 'scramble' || !currentGerman) return []
+    const { shuffledTiles } = generateScrambleTiles(currentGerman)
+    return shuffledTiles.map((text, idx) => ({ id: idx, text }))
+  }, [exerciseType, currentGerman])
 
-    // If completely new (0 reviews) and user hasn't clicked "Luyện tập ngay" yet:
-    if (rep === 0 && !isIntroDismissed) {
-      return 'new_intro'
-    }
+  const selectedTiles = useMemo(
+    () => selectedTileIds.map((id) => allScrambleTiles.find((t) => t.id === id)!).filter(Boolean),
+    [selectedTileIds, allScrambleTiles]
+  )
 
-    // Auto-mix pattern based on card ID & index (Quick Choice, Dictée, Reverse, Cloze)
-    const mixIndex = ((currentWord.id || 0) + currentIndex) % 4
-    if (mixIndex === 0) return 'choice'
-    if (mixIndex === 1) return 'dictee'
-    if (mixIndex === 2) return 'reverse'
-    return 'cloze'
-  }, [currentWord, currentIndex, isIntroDismissed])
+  const availableTiles = useMemo(
+    () => allScrambleTiles.filter((t) => !selectedTileIds.includes(t.id)),
+    [selectedTileIds, allScrambleTiles]
+  )
 
-  // Generate 4 multiple-choice options for 'choice' mode
+  // Generate 4 Vietnamese options for 'choice' and 'listening_choice'
   const choiceOptions = useMemo<string[]>(() => {
-    if (!currentWord || exerciseType !== 'choice') return []
+    if (!currentWord || (exerciseType !== 'choice' && exerciseType !== 'listening_choice')) {
+      return []
+    }
     const correctAnswer = currentWord.vietnamese
     const currentG = currentWord.german || currentWord.french || ''
 
@@ -120,7 +136,6 @@ export function StudyView({
     }
 
     const options = [correctAnswer, ...distractors]
-    // Deterministic shuffle
     return [...options].sort((a, b) => {
       const hashA = (a.charCodeAt(0) * 31 + baseSeed) % 100
       const hashB = (b.charCodeAt(0) * 31 + baseSeed) % 100
@@ -128,10 +143,43 @@ export function StudyView({
     })
   }, [currentWord, exerciseType, allWords, currentIndex])
 
-  // Auto-pronounce on card load if session is active
+  // Generate 4 German options for 'reverse_choice' (Nhìn tiếng Việt ➜ Chọn từ tiếng Đức)
+  const reverseChoiceOptions = useMemo<string[]>(() => {
+    if (!currentWord || exerciseType !== 'reverse_choice') return []
+    const correctAnswer = (currentWord.german || currentWord.french || '').trim()
+
+    const baseSeed = ((currentWord.id ?? 1) * 23 + currentIndex * 41) & 0x7fffffff
+    const candidates = allWords.filter(
+      (w) => (w.german || w.french || '').trim() !== correctAnswer
+    )
+    if (candidates.length === 0) return [correctAnswer]
+
+    const distractors: string[] = []
+    for (let i = 0; i < candidates.length && distractors.length < 3; i++) {
+      const idx = (baseSeed + i * 53) % candidates.length
+      const candG = (candidates[idx]?.german || candidates[idx]?.french || '').trim()
+      if (candG && !distractors.includes(candG)) {
+        distractors.push(candG)
+      }
+    }
+
+    const options = [correctAnswer, ...distractors]
+    return [...options].sort((a, b) => {
+      const hashA = (a.charCodeAt(0) * 37 + baseSeed) % 100
+      const hashB = (b.charCodeAt(0) * 37 + baseSeed) % 100
+      return hashA - hashB
+    })
+  }, [currentWord, exerciseType, allWords, currentIndex])
+
+  // Auto-pronounce on card load
   useEffect(() => {
     if (sessionState === 'active' && currentGerman) {
-      if (exerciseType === 'new_intro' || exerciseType === 'dictee' || exerciseType === 'choice') {
+      if (
+        exerciseType === 'new_intro' ||
+        exerciseType === 'dictee' ||
+        exerciseType === 'choice' ||
+        exerciseType === 'listening_choice'
+      ) {
         const timer = setTimeout(() => {
           speakGerman(currentGerman, 1.0)
         }, 200)
@@ -140,10 +188,13 @@ export function StudyView({
     }
   }, [sessionState, currentIndex, currentGerman, exerciseType])
 
-  // Focus input automatically for typing modes on non-touch devices
+  // Focus input automatically for typing modes
   useEffect(() => {
-    if (sessionState === 'active' && !isAnswerRevealed && exerciseType !== 'choice' && exerciseType !== 'new_intro') {
-      // Small delay prevents mobile keyboard jarring
+    if (
+      sessionState === 'active' &&
+      !isAnswerRevealed &&
+      (exerciseType === 'dictee' || exerciseType === 'reverse' || exerciseType === 'cloze')
+    ) {
       const t = setTimeout(() => {
         inputRef.current?.focus()
       }, 50)
@@ -160,17 +211,18 @@ export function StudyView({
     }
   }
 
-  const resetCardInteraction = () => {
+  const resetCardState = () => {
     setUserInput('')
     setSelectedChoice(null)
+    setSelectedArticle(null)
     setIsAnswerRevealed(false)
     setIsAnswerSubmitted(false)
     setFuzzyStatus('idle')
     setFuzzyMessage('')
-    setIsIntroDismissed(false)
+    setSelectedTileIds([])
   }
 
-  // Insert German Umlaut character into input
+  // Insert German Umlaut character into typing input
   const handleInsertUmlaut = (char: string) => {
     unlockAudio()
     playFeedback('click')
@@ -190,37 +242,39 @@ export function StudyView({
     }, 10)
   }
 
-  // Handle typing submission
-  const handleSubmitTyping = (e?: React.FormEvent) => {
-    e?.preventDefault()
-    if (!currentWord || isAnswerSubmitted || isAnswerRevealed) return
-
+  // 1. Handle Article Quiz Click (der / die / das)
+  const handleSelectArticle = (article: 'der' | 'die' | 'das') => {
+    if (!currentWord || isAnswerRevealed || isAnswerSubmitted) return
     unlockAudio()
-    const evaluation = evaluateAnswer(userInput, currentGerman)
+    setSelectedArticle(article)
 
-    if (evaluation.status === 'correct') {
+    const articleInfo = getGermanArticleAndNoun(currentGerman)
+    const isCorrect = articleInfo?.article === article
+
+    if (isCorrect) {
       playFeedback('success')
       setFuzzyStatus('correct')
-      setFuzzyMessage('Chính xác hoàn toàn! Sehr gut!')
+      setFuzzyMessage(`Chính xác! ${article} ${articleInfo?.noun}`)
       setIsAnswerSubmitted(true)
       setIsAnswerRevealed(true)
       speakGerman(currentGerman, 1.0)
-    } else if (evaluation.status === 'typo') {
-      playFeedback('typo')
-      setFuzzyStatus('typo')
-      setFuzzyMessage(evaluation.message || 'Gần đúng rồi, chú ý ký tự Umlaut!')
-      inputRef.current?.focus()
     } else {
       playFeedback('error')
       setFuzzyStatus('incorrect')
-      setFuzzyMessage('Chưa chính xác!')
+      setFuzzyMessage(`Sai rồi! Mạo từ đúng là '${articleInfo?.article}'.`)
       setIsAnswerSubmitted(true)
       setIsAnswerRevealed(true)
       speakGerman(currentGerman, 1.0)
+      if (currentWord.id) {
+        setWordMistakesMap((prev) => ({
+          ...prev,
+          [currentWord.id!]: (prev[currentWord.id!] || 0) + 1
+        }))
+      }
     }
   }
 
-  // Handle multiple-choice selection
+  // 2. Handle Multiple Choice / Listening Choice Selection (Vietnamese options)
   const handleSelectChoice = (option: string) => {
     if (!currentWord || isAnswerRevealed || isAnswerSubmitted) return
     unlockAudio()
@@ -241,10 +295,131 @@ export function StudyView({
       setIsAnswerSubmitted(true)
       setIsAnswerRevealed(true)
       speakGerman(currentGerman, 1.0)
+      if (currentWord.id) {
+        setWordMistakesMap((prev) => ({
+          ...prev,
+          [currentWord.id!]: (prev[currentWord.id!] || 0) + 1
+        }))
+      }
     }
   }
 
-  // Handle reveal directly
+  // 2B. Handle Reverse Choice Selection (Nhìn Việt ➜ Chọn từ Đức)
+  const handleSelectReverseChoice = (germanOption: string) => {
+    if (!currentWord || isAnswerRevealed || isAnswerSubmitted) return
+    unlockAudio()
+    setSelectedChoice(germanOption)
+
+    const isCorrect = germanOption === currentGerman
+    if (isCorrect) {
+      playFeedback('success')
+      setFuzzyStatus('correct')
+      setFuzzyMessage('Dịch ngược chính xác! Sehr gut!')
+      setIsAnswerSubmitted(true)
+      setIsAnswerRevealed(true)
+      speakGerman(currentGerman, 1.0)
+    } else {
+      playFeedback('error')
+      setFuzzyStatus('incorrect')
+      setFuzzyMessage(`Từ tiếng Đức đúng là: ${currentGerman}`)
+      setIsAnswerSubmitted(true)
+      setIsAnswerRevealed(true)
+      speakGerman(currentGerman, 1.0)
+      if (currentWord.id) {
+        setWordMistakesMap((prev) => ({
+          ...prev,
+          [currentWord.id!]: (prev[currentWord.id!] || 0) + 1
+        }))
+      }
+    }
+  }
+
+  // 3. Handle Scramble Tile Selection (Duolingo style)
+  const handlePickTile = (tile: { id: number; text: string }) => {
+    if (isAnswerRevealed) return
+    playFeedback('click')
+    setSelectedTileIds((prev) => [...prev, tile.id])
+  }
+
+  const handleUnpickTile = (tile: { id: number; text: string }) => {
+    if (isAnswerRevealed) return
+    playFeedback('pop')
+    setSelectedTileIds((prev) => prev.filter((id) => id !== tile.id))
+  }
+
+  const handleCheckScramble = () => {
+    if (isAnswerRevealed || selectedTiles.length === 0) return
+    unlockAudio()
+
+    const formedWithSpace = selectedTiles.map((t) => t.text).join(' ').trim()
+    const formedDirect = selectedTiles.map((t) => t.text).join('').trim()
+    const targetClean = currentGerman.toLowerCase()
+
+    const isMatch =
+      formedWithSpace.toLowerCase() === targetClean ||
+      formedDirect.toLowerCase() === targetClean.replace(/\s+/g, '') ||
+      formedDirect.toLowerCase() === targetClean
+
+    if (isMatch) {
+      playFeedback('success')
+      setFuzzyStatus('correct')
+      setFuzzyMessage('Ghép từ hoàn toàn chính xác!')
+      setIsAnswerSubmitted(true)
+      setIsAnswerRevealed(true)
+      speakGerman(currentGerman, 1.0)
+    } else {
+      playFeedback('error')
+      setFuzzyStatus('incorrect')
+      setFuzzyMessage(`Chưa đúng! Từ chuẩn là: ${currentGerman}`)
+      setIsAnswerSubmitted(true)
+      setIsAnswerRevealed(true)
+      speakGerman(currentGerman, 1.0)
+      if (currentWord?.id) {
+        setWordMistakesMap((prev) => ({
+          ...prev,
+          [currentWord.id!]: (prev[currentWord.id!] || 0) + 1
+        }))
+      }
+    }
+  }
+
+  // 4. Handle Typing Submission (Reverse Việt ➜ Đức / Dictée / Cloze)
+  const handleSubmitTyping = (e?: React.FormEvent) => {
+    e?.preventDefault()
+    if (!currentWord || isAnswerSubmitted || isAnswerRevealed) return
+
+    unlockAudio()
+    const evaluation = evaluateAnswer(userInput, currentGerman)
+
+    if (evaluation.status === 'correct') {
+      playFeedback('success')
+      setFuzzyStatus('correct')
+      setFuzzyMessage('Chính xác hoàn toàn! Sehr gut!')
+      setIsAnswerSubmitted(true)
+      setIsAnswerRevealed(true)
+      speakGerman(currentGerman, 1.0)
+    } else if (evaluation.status === 'typo') {
+      playFeedback('typo')
+      setFuzzyStatus('typo')
+      setFuzzyMessage(evaluation.message || 'Gần đúng rồi, chú ý ký tự Umlaut hoặc mạo từ!')
+      inputRef.current?.focus()
+    } else {
+      playFeedback('error')
+      setFuzzyStatus('incorrect')
+      setFuzzyMessage('Chưa chính xác!')
+      setIsAnswerSubmitted(true)
+      setIsAnswerRevealed(true)
+      speakGerman(currentGerman, 1.0)
+      if (currentWord.id) {
+        setWordMistakesMap((prev) => ({
+          ...prev,
+          [currentWord.id!]: (prev[currentWord.id!] || 0) + 1
+        }))
+      }
+    }
+  }
+
+  // Direct reveal
   const handleReveal = () => {
     if (!currentWord) return
     unlockAudio()
@@ -254,76 +429,67 @@ export function StudyView({
     setFuzzyStatus('incorrect')
     setFuzzyMessage('Đã mở đáp án')
     speakGerman(currentGerman, 1.0)
+    if (currentWord.id) {
+      setWordMistakesMap((prev) => ({
+        ...prev,
+        [currentWord.id!]: (prev[currentWord.id!] || 0) + 1
+      }))
+    }
   }
 
-  // Process SM-2 rating & advance card
-  const handleRate = async (quality: ReviewQuality) => {
-    if (!currentWord || !currentWord.id) return
-
+  // Advance to next task in interleaved queue & save SRS if word reached end
+  const handleAdvanceTask = async (customQuality?: ReviewQuality) => {
+    if (!currentWord || !currentTask) return
     unlockAudio()
     playFeedback('click')
-    const isSuccess = quality >= 3
-    const srsUpdate = updateSRS(currentWord, isSuccess, quality)
 
-    // Save to IndexedDB
-    await updateWord(currentWord.id, {
-      repetition: srsUpdate.repetition,
-      interval: srsUpdate.interval,
-      easeFactor: srsUpdate.easeFactor,
-      dueDate: srsUpdate.dueDate,
-      mistakes: srsUpdate.mistakes
-    })
+    const isSuccess = fuzzyStatus === 'correct'
+    const wordId = currentWord.id || 0
+    const mistakesSoFar = (wordMistakesMap[wordId] || 0) + (isSuccess ? 0 : 1)
 
-    resetCardInteraction()
+    // Check if this is the final round for this word
+    const remainingTasksForThisWord = tasks
+      .slice(currentIndex + 1)
+      .filter((t) => t.word.id === currentWord.id).length
 
-    // If card was failed (quality < 3), push back to the end of today's queue
-    if (!isSuccess) {
-      const updatedQueue = [...queue]
-      const failedCard: Word = {
-        ...currentWord,
+    if (remainingTasksForThisWord === 0 && currentWord.id) {
+      // All 4 rounds completed for this word -> compute and save SM-2 update
+      const quality: ReviewQuality =
+        customQuality ?? (mistakesSoFar === 0 ? 5 : mistakesSoFar === 1 ? 3 : 2)
+      const srsUpdate = updateSRS(currentWord, quality >= 3, quality)
+
+      await updateWord(currentWord.id, {
         repetition: srsUpdate.repetition,
         interval: srsUpdate.interval,
         easeFactor: srsUpdate.easeFactor,
         dueDate: srsUpdate.dueDate,
         mistakes: srsUpdate.mistakes
+      })
+    }
+
+    resetCardState()
+
+    // If task was failed, push an extra reinforcement task for this word to the back!
+    if (!isSuccess) {
+      const updatedTasks = [...tasks]
+      const reinforcementTask: StudyTask = {
+        word: currentWord,
+        exerciseType: currentTask.exerciseType,
+        round: currentTask.round,
+        totalRounds: currentTask.totalRounds
       }
-      updatedQueue.push(failedCard)
-      setQueue(updatedQueue)
+      updatedTasks.push(reinforcementTask)
+      setTasks(updatedTasks)
       setCurrentIndex((prev) => prev + 1)
     } else {
-      setCompletedCount((prev) => prev + 1)
+      setCompletedTasksCount((prev) => prev + 1)
       const nextIndex = currentIndex + 1
       setCurrentIndex(nextIndex)
 
-      if (nextIndex >= queue.length) {
+      if (nextIndex >= tasks.length) {
         triggerConfetti()
         onSessionComplete?.()
       }
-    }
-  }
-
-  const handleLoadMore = async () => {
-    if (!onLoadMoreNewWords) return
-    setIsLoadingMore(true)
-    unlockAudio()
-    playFeedback('click')
-    try {
-      const res = await onLoadMoreNewWords()
-      const newWords = Array.isArray(res) ? res : []
-      if (newWords.length > 0) {
-        setQueue(newWords)
-        setTotalInitialCount(newWords.length)
-        setCurrentIndex(0)
-        setCompletedCount(0)
-        resetCardInteraction()
-        setSessionState('active')
-      } else {
-        setSessionState('active')
-      }
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setIsLoadingMore(false)
     }
   }
 
@@ -350,10 +516,37 @@ export function StudyView({
     }, 200)
   }
 
-  // 1. Pre-session Overview screen (Material 3 & Google Labs style)
+  const handleLoadMore = async () => {
+    if (!onLoadMoreNewWords) return
+    setIsLoadingMore(true)
+    unlockAudio()
+    playFeedback('click')
+    try {
+      const res = await onLoadMoreNewWords()
+      const newWords = Array.isArray(res) ? res : []
+      if (newWords.length > 0) {
+        const newTasks = buildInterleavedStudyTasks(newWords)
+        setTasks(newTasks)
+        setCurrentIndex(0)
+        setCompletedTasksCount(0)
+        setWordMistakesMap({})
+        resetCardState()
+        setSessionState('active')
+      } else {
+        setSessionState('active')
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }
+
+  // 1. Pre-session Overview screen
   if (sessionState === 'overview') {
-    const dueCount = queue.filter((w) => (w.repetition ?? 0) > 0).length
-    const newCount = queue.filter((w) => (w.repetition ?? 0) === 0).length
+    const dueCount = initialWords.filter((w) => (w.repetition ?? 0) > 0).length
+    const newCount = initialWords.filter((w) => (w.repetition ?? 0) === 0).length
+    const totalInteractions = initialWords.length * 4
 
     return (
       <div className="w-full max-w-xl md:max-w-2xl mx-auto space-y-4 sm:space-y-5 animate-in fade-in duration-300 pb-16">
@@ -367,7 +560,6 @@ export function StudyView({
           }}
           className="relative overflow-hidden p-4 sm:p-6 md:p-8"
         >
-          {/* Subtle Google Labs chromatic background glow */}
           <div className="absolute -top-24 -right-24 w-72 h-72 bg-gradient-to-br from-[#1a73e8]/25 via-[#7c3aed]/20 to-[#d946ef]/15 rounded-full blur-3xl pointer-events-none" />
 
           <div className="relative z-10">
@@ -376,34 +568,85 @@ export function StudyView({
                 style={{ borderRadius: 9999 }}
                 className="text-[11px] sm:text-xs font-semibold uppercase tracking-wider text-[#a8c7fa] bg-[#004a77]/40 px-3 py-0.5 sm:px-3.5 sm:py-1 border border-[#004a77]"
               >
-                Goethe A1: Start Deutsch 1
+                Goethe A1 · Đa tương tác
               </span>
               <span
                 style={{ borderRadius: 9999 }}
-                className="text-[11px] sm:text-xs text-[#c4c7c5] font-mono px-2.5 py-0.5 sm:px-3 sm:py-1 bg-[#282a2c] border border-[#3c4043]"
+                className="text-[11px] sm:text-xs text-[#c4eed0] font-mono px-2.5 py-0.5 sm:px-3 sm:py-1 bg-[#0f5223]/50 border border-[#34a853]/60 font-semibold"
               >
-                Tổng {queue.length} từ
+                Lặp 4 lần / từ · {totalInteractions} thử thách
               </span>
             </div>
 
             <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-white tracking-tight leading-tight mt-1 mb-2 font-outfit">
-              Học tiếng Đức chuẩn viện Goethe !
+              Học từ vựng đa chiều 4 vòng lặp !
             </h2>
             <p className="text-xs sm:text-sm text-[#c4c7c5] leading-relaxed mb-5 sm:mb-6">
-              Hệ thống tự động pha trộn thông minh trắc nghiệm phản xạ, Dictée nghe chép chính tả và điền ngữ cảnh theo đề thi Start Deutsch 1.
+              Mỗi từ vựng được <strong>lặp lại 4 lần xen kẽ ngẫu nhiên</strong> với các dạng tương tác khác nhau: Chọn mạo từ (der/die/das), Phản xạ Việt ➜ Đức, Nghe hiểu, Xếp mảnh chữ và Gõ dịch ngược Việt ➜ Đức.
             </p>
+
+            {/* 4 Interactive Modalities Showcase */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5 sm:mb-6">
+              <div
+                style={{ borderRadius: 18 }}
+                className="p-3 bg-[#282a2c] border border-[#3c4043] text-center space-y-1"
+              >
+                <div className="text-[#a8c7fa] font-bold text-xs flex items-center justify-center gap-1">
+                  <Check className="h-3.5 w-3.5" />
+                  Vòng 1
+                </div>
+                <div className="text-[11px] text-[#e3e3e3] font-semibold">Quiz Mạo từ</div>
+                <div className="text-[10px] text-[#8e918f]">der / die / das</div>
+              </div>
+
+              <div
+                style={{ borderRadius: 18 }}
+                className="p-3 bg-[#282a2c] border border-[#3c4043] text-center space-y-1"
+              >
+                <div className="text-[#c084fc] font-bold text-xs flex items-center justify-center gap-1">
+                  <Headphones className="h-3.5 w-3.5" />
+                  Vòng 2
+                </div>
+                <div className="text-[11px] text-[#e3e3e3] font-semibold">Nghe & Dịch ngược</div>
+                <div className="text-[10px] text-[#8e918f]">Chọn từ Việt ➜ Đức</div>
+              </div>
+
+              <div
+                style={{ borderRadius: 18 }}
+                className="p-3 bg-[#282a2c] border border-[#3c4043] text-center space-y-1"
+              >
+                <div className="text-[#fbbc04] font-bold text-xs flex items-center justify-center gap-1">
+                  <Puzzle className="h-3.5 w-3.5" />
+                  Vòng 3
+                </div>
+                <div className="text-[11px] text-[#e3e3e3] font-semibold">Xếp mảnh chữ</div>
+                <div className="text-[10px] text-[#8e918f]">Ghép từ Duolingo</div>
+              </div>
+
+              <div
+                style={{ borderRadius: 18 }}
+                className="p-3 bg-[#282a2c] border border-[#3c4043] text-center space-y-1"
+              >
+                <div className="text-[#34a853] font-bold text-xs flex items-center justify-center gap-1">
+                  <CheckCheck className="h-3.5 w-3.5" />
+                  Vòng 4
+                </div>
+                <div className="text-[11px] text-[#e3e3e3] font-semibold">Gõ Việt ➜ Đức</div>
+                <div className="text-[10px] text-[#8e918f]">Dịch ngược & Điền từ</div>
+              </div>
+            </div>
 
             <div className="grid grid-cols-2 gap-2.5 sm:gap-3.5 mb-5 sm:mb-6">
               <div
                 style={{ borderRadius: 20 }}
-                className="border border-[#3c4043] bg-[#282a2c] p-3.5 sm:p-5 transition-colors hover:border-[#a8c7fa]/50"
+                className="border border-[#3c4043] bg-[#282a2c] p-3.5 sm:p-5"
               >
                 <div className="text-2xl sm:text-3xl font-extrabold text-[#a8c7fa] font-outfit">{newCount}</div>
-                <div className="text-[11px] sm:text-xs text-[#c4c7c5] font-medium mt-1">Từ mới từ kho</div>
+                <div className="text-[11px] sm:text-xs text-[#c4c7c5] font-medium mt-1">Từ mới trong phiên</div>
               </div>
               <div
                 style={{ borderRadius: 20 }}
-                className="border border-[#3c4043] bg-[#282a2c] p-3.5 sm:p-5 transition-colors hover:border-[#ffe082]/50"
+                className="border border-[#3c4043] bg-[#282a2c] p-3.5 sm:p-5"
               >
                 <div className="text-2xl sm:text-3xl font-extrabold text-[#ffe082] font-outfit">{dueCount}</div>
                 <div className="text-[11px] sm:text-xs text-[#c4c7c5] font-medium mt-1">Từ cũ cần ôn</div>
@@ -422,61 +665,8 @@ export function StudyView({
               className="w-full h-12 sm:h-14 text-sm sm:text-base font-bold shadow-lg shadow-indigo-500/25 group cursor-pointer"
             >
               <Play className="h-4 w-4 sm:h-5 sm:w-5 mr-2 fill-current transition-transform group-hover:scale-110" />
-              Bắt đầu học ngay
+              Bắt đầu học ngay ({totalInteractions} lượt tương tác)
             </Button>
-          </div>
-        </div>
-
-        {/* Level Mastery Breakdown Info (Material 3 Card) */}
-        <div
-          style={{
-            borderRadius: 24,
-            backgroundColor: '#1e1f20',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.4)'
-          }}
-          className="p-4 sm:p-5 md:p-6 space-y-3.5"
-        >
-          <div className="flex items-center justify-between text-xs sm:text-sm font-semibold text-[#e3e3e3]">
-            <span>Cấp độ thông thạo từ vựng (SRS Levels)</span>
-            <Sparkles className="h-4 w-4 text-[#fbbc04]" />
-          </div>
-          <div className="space-y-2.5 text-xs sm:text-sm">
-            <div className="flex items-center justify-between text-[#c4c7c5]">
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-[#8e918f]" />
-                Level 0 - Kho từ
-              </span>
-              <span className="text-[11px] sm:text-xs text-[#8e918f]">Chưa học (Nằm trong kho)</span>
-            </div>
-            <div className="flex items-center justify-between text-[#c4c7c5]">
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-[#a8c7fa]" />
-                Level 1 - Khởi đầu
-              </span>
-              <span className="text-[11px] sm:text-xs text-[#a8c7fa]">Nhớ 1 lần (Ôn lại sau 1 ngày)</span>
-            </div>
-            <div className="flex items-center justify-between text-[#c4c7c5]">
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-[#c2e7ff]" />
-                Level 2 - Đang nhớ
-              </span>
-              <span className="text-[11px] sm:text-xs text-[#c2e7ff]">Nhớ 2-3 lần (Ôn lại sau 6 ngày)</span>
-            </div>
-            <div className="flex items-center justify-between text-[#c4c7c5]">
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-[#ffe082]" />
-                Level 3 - Khắc sâu
-              </span>
-              <span className="text-[11px] sm:text-xs text-[#ffe082]">Nhớ 4-5 lần (Trí nhớ trung hạn)</span>
-            </div>
-            <div className="flex items-center justify-between text-[#c4c7c5]">
-              <span className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-[#c4eed0]" />
-                Level 4 - Thành thạo
-              </span>
-              <span className="text-[11px] sm:text-xs text-[#c4eed0]">Nhớ 6+ lần (Trí nhớ dài hạn)</span>
-            </div>
           </div>
         </div>
       </div>
@@ -484,7 +674,7 @@ export function StudyView({
   }
 
   // 2. All cards completed Celebration view
-  if (!currentWord || currentIndex >= queue.length) {
+  if (!currentWord || currentIndex >= tasks.length) {
     return (
       <div className="flex flex-col items-center justify-center py-8 sm:py-12 px-3 text-center animate-in fade-in zoom-in-95 duration-300 w-full max-w-xl md:max-w-2xl mx-auto pb-16">
         <div className="relative mb-5 sm:mb-6">
@@ -495,10 +685,10 @@ export function StudyView({
         </div>
 
         <h2 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-white mb-2 font-outfit">
-          Wunderbar ! Hoàn thành đợt học!
+          Wunderbar ! Hoàn thành phiên học!
         </h2>
         <p className="text-xs sm:text-sm text-[#c4c7c5] max-w-sm mb-5 sm:mb-6 leading-relaxed">
-          Tất cả {totalInitialCount} từ tiếng Đức trong phiên đã được ghi nhận vào thuật toán Spaced Repetition (SM-2).
+          Tất cả {initialWords.length} từ vựng đã hoàn thành <strong>4 lượt lặp lại đa phương thức</strong> và được ghi nhận vào thuật toán SM-2.
         </p>
 
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3.5 w-full max-w-sm mb-6 sm:mb-8">
@@ -506,15 +696,15 @@ export function StudyView({
             style={{ borderRadius: 20 }}
             className="border border-[#3c4043] bg-[#1e1f20] p-3.5 sm:p-5"
           >
-            <div className="text-2xl sm:text-3xl font-extrabold text-white font-outfit">{totalInitialCount}</div>
-            <div className="text-[11px] sm:text-xs text-[#c4c7c5] font-medium mt-1">Từ đã hoàn thành</div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-white font-outfit">{initialWords.length}</div>
+            <div className="text-[11px] sm:text-xs text-[#c4c7c5] font-medium mt-1">Từ đã khắc sâu</div>
           </div>
           <div
             style={{ borderRadius: 20 }}
             className="border border-[#3c4043] bg-[#1e1f20] p-3.5 sm:p-5"
           >
-            <div className="text-2xl sm:text-3xl font-extrabold text-[#c4eed0] font-outfit">100%</div>
-            <div className="text-[11px] sm:text-xs text-[#c4c7c5] font-medium mt-1">Mục tiêu đợt học</div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-[#c4eed0] font-outfit">{completedTasksCount}</div>
+            <div className="text-[11px] sm:text-xs text-[#c4c7c5] font-medium mt-1">Lượt tương tác đạt</div>
           </div>
         </div>
 
@@ -541,16 +731,18 @@ export function StudyView({
             onClick={() => {
               unlockAudio()
               if (initialWords.length > 0) {
-                setQueue([...initialWords])
+                const newTasks = buildInterleavedStudyTasks(initialWords)
+                setTasks(newTasks)
                 setCurrentIndex(0)
-                setCompletedCount(0)
-                resetCardInteraction()
+                setCompletedTasksCount(0)
+                setWordMistakesMap({})
+                resetCardState()
                 setSessionState('active')
               }
             }}
           >
             <RotateCcw className="h-4 w-4 mr-1.5" />
-            Ôn lại phiên này
+            Luyện lại phiên này
           </Button>
         </div>
       </div>
@@ -560,6 +752,7 @@ export function StudyView({
   // 3. Active Interactive Card Session
   const cloze = maskSentence(currentWord.example || '', currentGerman)
   const mastery = getMasteryInfo(currentWord.repetition ?? 0)
+  const articleInfo = getGermanArticleAndNoun(currentGerman)
 
   return (
     <div className="flex flex-col w-full max-w-xl md:max-w-2xl mx-auto space-y-4 sm:space-y-5 pb-16 animate-in fade-in duration-200">
@@ -568,21 +761,19 @@ export function StudyView({
         <div className="flex items-center justify-between text-xs text-[#c4c7c5] font-medium">
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-[#a8c7fa] animate-pulse" />
-            <span>Thẻ {currentIndex + 1} / {queue.length}</span>
-            {queue.length > totalInitialCount && (
-              <span className="text-[#ffe082] font-normal">
-                (+{queue.length - totalInitialCount} làm lại)
-              </span>
-            )}
+            <span>Thử thách {currentIndex + 1} / {tasks.length}</span>
+            <span className="text-[#a8c7fa] font-semibold bg-[#004a77]/40 px-2.5 py-0.5 rounded-full border border-[#004a77]">
+              Lần lặp {currentTask.round}/{currentTask.totalRounds} của từ này
+            </span>
           </div>
           <span className="font-mono text-[#a8c7fa] font-semibold text-xs sm:text-sm">
-            {Math.round((completedCount / Math.max(1, totalInitialCount)) * 100)}%
+            {Math.round((completedTasksCount / Math.max(1, tasks.length)) * 100)}%
           </span>
         </div>
-        <Progress value={completedCount} max={Math.max(1, totalInitialCount)} />
+        <Progress value={completedTasksCount} max={Math.max(1, tasks.length)} />
       </div>
 
-      {/* Main Flashcard Card (Google Labs Material 3 Surface - Optimized for iPhone 16) */}
+      {/* Main Flashcard Card (Google Labs Material 3 Surface) */}
       <div
         style={{
           borderRadius: 28,
@@ -592,7 +783,7 @@ export function StudyView({
         }}
         className="relative p-4 sm:p-6 md:p-8 transition-all duration-300"
       >
-        {/* Top Info Bar: Category + Mastery Level Chips */}
+        {/* Top Info Bar */}
         <div className="flex items-center justify-between mb-4 sm:mb-5 gap-1.5 flex-wrap">
           <div className="flex items-center gap-1.5">
             <span
@@ -606,25 +797,29 @@ export function StudyView({
           <div className="flex items-center gap-1.5">
             <span
               style={{ borderRadius: 9999 }}
-              className="text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-0.5 sm:py-1 bg-[#282a2c] text-[#c4c7c5] font-medium border border-[#444746]/60"
+              className="text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-0.5 sm:py-1 bg-[#282a2c] text-[#c4c7c5] font-medium border border-[#444746]/60 flex items-center gap-1"
             >
+              {exerciseType === 'article_quiz' && '🔵 Quiz Mạo từ (der/die/das)'}
+              {exerciseType === 'reverse_choice' && '🇻🇳➜🇩🇪 Chọn từ tiếng Đức'}
+              {exerciseType === 'listening_choice' && '🎧 Nghe âm thanh ➜ Chọn nghĩa'}
+              {exerciseType === 'scramble' && '🧩 Xếp mảnh chữ tiếng Đức'}
+              {exerciseType === 'choice' && '🇩🇪➜🇻🇳 Chọn nghĩa tiếng Việt'}
+              {exerciseType === 'reverse' && '✍️ Dịch ngược Việt ➜ Gõ tiếng Đức'}
+              {exerciseType === 'dictee' && '🎧 Nghe ➜ Chép chính tả'}
+              {exerciseType === 'cloze' && '📝 Điền từ vào câu'}
               {exerciseType === 'new_intro' && '✨ Khám phá từ mới'}
-              {exerciseType === 'choice' && '⚡ Trắc nghiệm nhanh'}
-              {exerciseType === 'dictee' && '🎧 Dictée tiếng Đức'}
-              {exerciseType === 'reverse' && '🇩🇪 Dịch Việt ➜ Đức'}
-              {exerciseType === 'cloze' && '🧩 Điền chỗ trống'}
             </span>
           </div>
         </div>
 
-        {/* Content Area Based on Auto-Assigned Exercise */}
+        {/* Content Area Based on Exercise Type */}
         <div className="py-1 sm:py-2 text-center">
-          {/* A. NEW WORD INTRO (Khám phá từ mới đầu tiên) */}
+          {/* 0. NEW WORD INTRO (Khám phá từ mới lần đầu) */}
           {exerciseType === 'new_intro' && (
-            <div className="space-y-4 sm:space-y-5 py-1 sm:py-2 text-center animate-in fade-in duration-200">
+            <div className="space-y-4 sm:space-y-5 py-1 text-center animate-in fade-in duration-200">
               <div className="space-y-1">
                 <span className="text-[11px] sm:text-xs font-semibold text-[#a8c7fa] uppercase tracking-wider">
-                  Khám phá từ mới (Goethe A1)
+                  Làm quen từ mới
                 </span>
                 <div className="flex items-center justify-center gap-2 sm:gap-3">
                   <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight font-outfit">
@@ -649,7 +844,9 @@ export function StudyView({
                 style={{ borderRadius: 20 }}
                 className="bg-[#282a2c] p-3.5 sm:p-5 border border-[#3c4043]"
               >
-                <div className="text-base sm:text-lg md:text-xl font-bold text-[#e3e3e3]">{currentWord.vietnamese}</div>
+                <div className="text-base sm:text-lg md:text-xl font-bold text-[#e3e3e3]">
+                  {currentWord.vietnamese}
+                </div>
               </div>
 
               {currentWord.example && (
@@ -672,61 +869,168 @@ export function StudyView({
                 </div>
               )}
 
-              {/* Action Buttons for New Word Intro */}
-              <div className="space-y-2.5 pt-1">
-                <Button
-                  variant="primary"
-                  size="lg"
-                  onClick={() => {
-                    unlockAudio()
-                    playFeedback('click')
-                    setIsIntroDismissed(true)
-                  }}
-                  style={{ borderRadius: 9999 }}
-                  className="w-full font-bold h-12 sm:h-13 text-xs sm:text-sm shadow-md shadow-blue-500/20 cursor-pointer"
-                >
-                  <span>Luyện tập từ này ngay</span>
-                  <ArrowRight className="h-4 w-4 ml-1.5" />
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="md"
-                  onClick={() => {
-                    handleRate(4)
-                  }}
-                  style={{ borderRadius: 9999 }}
-                  className="w-full text-xs text-[#c4c7c5] hover:text-white border-[#444746] cursor-pointer h-11"
-                >
-                  <Check className="h-4 w-4 mr-1.5 text-[#34a853]" />
-                  Tôi đã thuộc từ này (Từ tiếp theo)
-                </Button>
-              </div>
+              <Button
+                variant="primary"
+                size="lg"
+                onClick={() => {
+                  playFeedback('success')
+                  setFuzzyStatus('correct')
+                  handleAdvanceTask()
+                }}
+                style={{ borderRadius: 9999 }}
+                className="w-full font-bold h-12 sm:h-13 text-xs sm:text-sm shadow-md shadow-blue-500/20 cursor-pointer"
+              >
+                <span>Đã nhớ mặt chữ · Sang thử thách tiếp theo</span>
+                <ArrowRight className="h-4 w-4 ml-1.5" />
+              </Button>
             </div>
           )}
 
-          {/* B. MULTIPLE CHOICE (Google Labs quick reflex) */}
-          {exerciseType === 'choice' && (
+          {/* A. ARTICLE QUIZ (der / die / das) */}
+          {exerciseType === 'article_quiz' && articleInfo && (
             <div className="space-y-4 sm:space-y-5 py-1">
               <div className="space-y-1">
-                <span className="text-xs text-[#c4c7c5] font-medium">Chọn nghĩa đúng của từ tiếng Đức:</span>
-                <div className="flex items-center justify-center gap-2 sm:gap-3">
+                <span className="text-xs text-[#a8c7fa] font-medium">Chọn mạo từ đúng cho danh từ này:</span>
+                <div className="flex items-center justify-center gap-2">
                   <h3 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight font-outfit">
-                    {currentGerman}
+                    {isAnswerRevealed ? (
+                      <span className="text-[#a8c7fa]">{currentGerman}</span>
+                    ) : (
+                      <span>
+                        <span className="text-[#8e918f] underline underline-offset-4 decoration-dashed decoration-[#a8c7fa]">
+                          [ ... ]
+                        </span>{' '}
+                        {articleInfo.noun}
+                      </span>
+                    )}
                   </h3>
                   <button
                     type="button"
                     onClick={(e) => handlePronounce(e)}
                     style={{ borderRadius: 9999 }}
-                    className="h-10 w-10 sm:h-11 sm:w-11 flex items-center justify-center text-[#a8c7fa] hover:bg-[#004a77]/40 border border-[#a8c7fa]/30 transition-all cursor-pointer active:scale-95 shrink-0"
+                    className="h-10 w-10 flex items-center justify-center text-[#a8c7fa] hover:bg-[#004a77]/40 border border-[#a8c7fa]/30 transition-all cursor-pointer active:scale-95 shrink-0"
                     title="Nghe phát âm"
                   >
                     <Volume2 className="h-5 w-5" />
                   </button>
                 </div>
-                {currentWord.ipa && (
-                  <div className="text-xs font-mono text-[#c4c7c5]">{currentWord.ipa}</div>
-                )}
+                <div className="text-sm text-[#e3e3e3] font-medium mt-1">
+                  Nghĩa: <span className="text-[#c4eed0] font-semibold">{currentWord.vietnamese}</span>
+                </div>
+              </div>
+
+              {/* 3 Large Tactile Article Buttons */}
+              <div className="grid grid-cols-3 gap-2.5 sm:gap-3 pt-2">
+                {(['der', 'die', 'das'] as const).map((art) => {
+                  const isSelected = selectedArticle === art
+                  const isCorrect = articleInfo.article === art
+
+                  let btnColor = 'bg-[#282a2c] border-[#444746] text-white hover:border-[#a8c7fa]'
+                  if (art === 'der') btnColor = 'bg-[#004a77]/30 border-[#004a77] text-[#c2e7ff] hover:bg-[#004a77]/50'
+                  if (art === 'die') btnColor = 'bg-[#410002]/30 border-[#93000a]/60 text-[#ffdad6] hover:bg-[#410002]/50'
+                  if (art === 'das') btnColor = 'bg-[#0f5223]/30 border-[#34a853]/60 text-[#c4eed0] hover:bg-[#0f5223]/50'
+
+                  if (isAnswerRevealed) {
+                    if (isCorrect) {
+                      btnColor = 'bg-[#0f5223] border-[#34a853] text-[#c4eed0] font-bold shadow-lg scale-105'
+                    } else if (isSelected) {
+                      btnColor = 'bg-[#8c1d18]/40 border-[#f2b8b5] text-[#f2b8b5] opacity-60'
+                    } else {
+                      btnColor = 'opacity-30 border-[#3c4043]'
+                    }
+                  }
+
+                  return (
+                    <button
+                      key={art}
+                      disabled={isAnswerRevealed}
+                      onClick={() => handleSelectArticle(art)}
+                      style={{ borderRadius: 20 }}
+                      className={`h-14 sm:h-16 flex flex-col items-center justify-center border-2 transition-all active:scale-95 cursor-pointer font-outfit ${btnColor}`}
+                    >
+                      <span className="text-lg sm:text-xl font-extrabold">{art}</span>
+                      <span className="text-[10px] opacity-75 font-normal">
+                        {art === 'der' ? 'Giống đực' : art === 'die' ? 'Giống cái' : 'Giống trung'}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* B. REVERSE CHOICE (Dịch ngược Trắc nghiệm: Nhìn nghĩa Việt ➜ Chọn từ tiếng Đức) */}
+          {exerciseType === 'reverse_choice' && (
+            <div className="space-y-4 sm:space-y-5 py-1">
+              <div className="space-y-1">
+                <span className="text-xs text-[#c084fc] font-medium flex items-center justify-center gap-1">
+                  <Languages className="h-3.5 w-3.5" />
+                  Chọn từ tiếng Đức ứng với nghĩa tiếng Việt sau:
+                </span>
+                <h3 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight font-outfit mt-1">
+                  &ldquo;{currentWord.vietnamese}&rdquo;
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3 pt-1 text-left">
+                {reverseChoiceOptions.map((opt, i) => {
+                  const isSelected = selectedChoice === opt
+                  const isCorrectAnswer = opt === currentGerman
+
+                  let btnStyle =
+                    'bg-[#282a2c]/80 border-[#444746] text-[#e3e3e3] hover:bg-[#282a2c] hover:border-[#a8c7fa]'
+                  if (isAnswerRevealed) {
+                    if (isCorrectAnswer) {
+                      btnStyle =
+                        'bg-[#0f5223]/40 border-[#34a853] text-[#c4eed0] font-semibold shadow-md shadow-green-500/10'
+                    } else if (isSelected) {
+                      btnStyle = 'bg-[#8c1d18]/30 border-[#f2b8b5] text-[#f2b8b5]'
+                    } else {
+                      btnStyle = 'bg-[#282a2c]/30 border-[#3c4043]/50 text-[#8e918f] opacity-50'
+                    }
+                  }
+
+                  return (
+                    <button
+                      key={i}
+                      disabled={isAnswerRevealed}
+                      onClick={() => handleSelectReverseChoice(opt)}
+                      style={{ borderRadius: 18 }}
+                      className={`flex items-center justify-between p-3.5 sm:p-4 border text-sm sm:text-base font-bold font-outfit transition-all active:scale-[0.98] cursor-pointer ${btnStyle}`}
+                    >
+                      <span className="leading-snug">{opt}</span>
+                      {isAnswerRevealed && isCorrectAnswer && (
+                        <CheckCircle2 className="h-4 w-4 text-[#34a853] shrink-0 ml-2" />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* C. LISTENING CHOICE (Nghe phản xạ tai không nhìn chữ) */}
+          {exerciseType === 'listening_choice' && (
+            <div className="space-y-4 sm:space-y-5 py-2">
+              <div className="flex flex-col items-center space-y-3">
+                <button
+                  type="button"
+                  onClick={(e) => handlePronounce(e)}
+                  style={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: 9999,
+                    boxShadow: '0 8px 24px -2px rgba(26, 115, 232, 0.35)'
+                  }}
+                  className="flex items-center justify-center border-2 border-[#a8c7fa]/60 bg-[#004a77]/40 hover:bg-[#004a77]/60 text-[#a8c7fa] active:scale-95 transition-all cursor-pointer"
+                  title="Chạm để nghe lại"
+                >
+                  <Volume2 className="h-9 w-9 animate-pulse" />
+                </button>
+                <div className="text-xs sm:text-sm text-[#c4c7c5] flex items-center gap-1.5 justify-center">
+                  <Headphones className="h-3.5 w-3.5 text-[#a8c7fa]" />
+                  <span>Nghe phát âm và chọn nghĩa tiếng Việt đúng:</span>
+                </div>
               </div>
 
               {/* 4 Choices grid */}
@@ -735,10 +1039,12 @@ export function StudyView({
                   const isSelected = selectedChoice === opt
                   const isCorrectAnswer = opt === currentWord.vietnamese
 
-                  let btnStyle = 'bg-[#282a2c]/80 border-[#444746] text-[#e3e3e3] hover:bg-[#282a2c] hover:border-[#a8c7fa]'
+                  let btnStyle =
+                    'bg-[#282a2c]/80 border-[#444746] text-[#e3e3e3] hover:bg-[#282a2c] hover:border-[#a8c7fa]'
                   if (isAnswerRevealed) {
                     if (isCorrectAnswer) {
-                      btnStyle = 'bg-[#0f5223]/40 border-[#34a853] text-[#c4eed0] font-semibold shadow-md shadow-green-500/10'
+                      btnStyle =
+                        'bg-[#0f5223]/40 border-[#34a853] text-[#c4eed0] font-semibold shadow-md shadow-green-500/10'
                     } else if (isSelected) {
                       btnStyle = 'bg-[#8c1d18]/30 border-[#f2b8b5] text-[#f2b8b5]'
                     } else {
@@ -765,7 +1071,151 @@ export function StudyView({
             </div>
           )}
 
-          {/* C. DICTÉE (Nghe chép chính tả tiếng Đức) */}
+          {/* D. SCRAMBLE TILES (Xếp mảnh chữ Duolingo) */}
+          {exerciseType === 'scramble' && (
+            <div className="space-y-4 py-1 text-center">
+              <div className="space-y-1">
+                <span className="text-xs text-[#fbbc04] font-medium flex items-center justify-center gap-1">
+                  <Puzzle className="h-3.5 w-3.5" />
+                  Chạm các mảnh ghép để xếp thành từ tiếng Đức:
+                </span>
+                <div className="text-xl sm:text-2xl font-bold text-white mt-1">
+                  &ldquo;{currentWord.vietnamese}&rdquo;
+                </div>
+              </div>
+
+              {/* Selected Tiles Slot (The Dropzone) */}
+              <div
+                style={{ borderRadius: 20 }}
+                className="min-h-[64px] p-3 bg-[#131314] border-2 border-dashed border-[#444746] flex flex-wrap items-center justify-center gap-2 transition-all"
+              >
+                {selectedTiles.length === 0 ? (
+                  <span className="text-xs text-[#8e918f] italic">
+                    Chạm vào các mảnh bên dưới để ghép từ tiếng Đức
+                  </span>
+                ) : (
+                  selectedTiles.map((tile) => (
+                    <button
+                      key={tile.id}
+                      disabled={isAnswerRevealed}
+                      onClick={() => handleUnpickTile(tile)}
+                      style={{ borderRadius: 14 }}
+                      className="px-3.5 py-2 bg-[#004a77] text-[#c2e7ff] border border-[#a8c7fa]/60 font-bold text-sm shadow-sm active:scale-95 transition-all cursor-pointer"
+                    >
+                      {tile.text}
+                    </button>
+                  ))
+                )}
+              </div>
+
+              {/* Available Tiles Pool */}
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1 min-h-[48px]">
+                {availableTiles.map((tile) => (
+                  <button
+                    key={tile.id}
+                    disabled={isAnswerRevealed}
+                    onClick={() => handlePickTile(tile)}
+                    style={{ borderRadius: 14 }}
+                    className="px-3.5 py-2 bg-[#282a2c] hover:bg-[#333538] text-white border border-[#444746] font-semibold text-sm shadow-sm active:scale-90 transition-all cursor-pointer"
+                  >
+                    {tile.text}
+                  </button>
+                ))}
+              </div>
+
+              {/* Action buttons for scramble */}
+              {!isAnswerRevealed && (
+                <div className="grid grid-cols-2 gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="md"
+                    onClick={handleReveal}
+                    style={{ borderRadius: 9999 }}
+                    className="w-full text-xs sm:text-sm text-[#c4c7c5] hover:text-white cursor-pointer h-11"
+                  >
+                    <Eye className="h-4 w-4 mr-1.5" />
+                    Hiện đáp án
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="md"
+                    disabled={selectedTiles.length === 0}
+                    onClick={handleCheckScramble}
+                    style={{ borderRadius: 9999 }}
+                    className="w-full text-xs sm:text-sm font-semibold cursor-pointer h-11"
+                  >
+                    Kiểm tra
+                    <ArrowRight className="h-4 w-4 ml-1.5" />
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* E. MULTIPLE CHOICE (Đức ➜ Việt) */}
+          {exerciseType === 'choice' && (
+            <div className="space-y-4 sm:space-y-5 py-1">
+              <div className="space-y-1">
+                <span className="text-xs text-[#c4c7c5] font-medium">Chọn nghĩa đúng của từ tiếng Đức:</span>
+                <div className="flex items-center justify-center gap-2 sm:gap-3">
+                  <h3 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight font-outfit">
+                    {currentGerman}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={(e) => handlePronounce(e)}
+                    style={{ borderRadius: 9999 }}
+                    className="h-10 w-10 flex items-center justify-center text-[#a8c7fa] hover:bg-[#004a77]/40 border border-[#a8c7fa]/30 transition-all cursor-pointer active:scale-95 shrink-0"
+                    title="Nghe phát âm"
+                  >
+                    <Volume2 className="h-5 w-5" />
+                  </button>
+                </div>
+                {currentWord.ipa && (
+                  <div className="text-xs font-mono text-[#c4c7c5]">{currentWord.ipa}</div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3 pt-1 text-left">
+                {choiceOptions.map((opt, i) => {
+                  const isSelected = selectedChoice === opt
+                  const isCorrectAnswer = opt === currentWord.vietnamese
+
+                  let btnStyle =
+                    'bg-[#282a2c]/80 border-[#444746] text-[#e3e3e3] hover:bg-[#282a2c] hover:border-[#a8c7fa]'
+                  if (isAnswerRevealed) {
+                    if (isCorrectAnswer) {
+                      btnStyle =
+                        'bg-[#0f5223]/40 border-[#34a853] text-[#c4eed0] font-semibold shadow-md shadow-green-500/10'
+                    } else if (isSelected) {
+                      btnStyle = 'bg-[#8c1d18]/30 border-[#f2b8b5] text-[#f2b8b5]'
+                    } else {
+                      btnStyle = 'bg-[#282a2c]/30 border-[#3c4043]/50 text-[#8e918f] opacity-50'
+                    }
+                  }
+
+                  return (
+                    <button
+                      key={i}
+                      disabled={isAnswerRevealed}
+                      onClick={() => handleSelectChoice(opt)}
+                      style={{ borderRadius: 18 }}
+                      className={`flex items-center justify-between p-3.5 sm:p-4 border text-xs sm:text-sm font-medium transition-all active:scale-[0.98] cursor-pointer ${btnStyle}`}
+                    >
+                      <span className="leading-snug">{opt}</span>
+                      {isAnswerRevealed && isCorrectAnswer && (
+                        <CheckCircle2 className="h-4 w-4 text-[#34a853] shrink-0 ml-2" />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* F. DICTÉE (Nghe chép chính tả tiếng Đức) */}
           {exerciseType === 'dictee' && (
             <div className="flex flex-col items-center space-y-3.5 py-2 sm:py-3">
               <button
@@ -784,7 +1234,7 @@ export function StudyView({
               </button>
               <div className="text-xs sm:text-sm text-[#c4c7c5] flex items-center gap-1.5 justify-center">
                 <Headphones className="h-3.5 w-3.5 text-[#a8c7fa]" />
-                <span>Nghe và gõ lại từ tiếng Đức</span>
+                <span>Nghe và gõ lại chính xác từ tiếng Đức</span>
               </div>
               <div
                 style={{ borderRadius: 9999 }}
@@ -795,12 +1245,12 @@ export function StudyView({
             </div>
           )}
 
-          {/* D. REVERSE (Dịch Việt ➜ Đức) */}
+          {/* G. REVERSE TYPING (Dịch ngược Việt ➜ Gõ từ tiếng Đức) */}
           {exerciseType === 'reverse' && (
             <div className="space-y-3 sm:space-y-4 py-1 sm:py-2">
-              <div className="text-xs sm:text-sm text-[#c4c7c5] font-medium flex items-center justify-center gap-1.5">
-                <Languages className="h-4 w-4 text-[#a8c7fa]" />
-                Dịch nghĩa sau sang tiếng Đức:
+              <div className="text-xs sm:text-sm text-[#34a853] font-semibold flex items-center justify-center gap-1.5">
+                <Languages className="h-4 w-4" />
+                Dịch nghĩa tiếng Việt sau sang từ tiếng Đức (kèm mạo từ nếu có):
               </div>
               <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white tracking-tight leading-snug font-outfit">
                 &ldquo;{currentWord.vietnamese}&rdquo;
@@ -810,7 +1260,7 @@ export function StudyView({
                   style={{ borderRadius: 20 }}
                   className="text-xs sm:text-sm text-[#c4c7c5] bg-[#282a2c]/70 p-3 sm:p-4 border border-[#3c4043] text-left space-y-1"
                 >
-                  <div className="text-[11px] text-[#8e918f] font-medium">Ngữ cảnh tiếng Đức:</div>
+                  <div className="text-[11px] text-[#8e918f] font-medium">Ngữ cảnh gợi ý:</div>
                   <div className="text-[#e3e3e3] font-medium italic leading-snug">{cloze.maskedSentence}</div>
                   {currentWord.exampleVi && (
                     <div className="text-[#c4c7c5] not-italic text-xs leading-snug">{currentWord.exampleVi}</div>
@@ -820,12 +1270,12 @@ export function StudyView({
             </div>
           )}
 
-          {/* E. CLOZE TEST (Điền chỗ trống) */}
+          {/* H. CLOZE TEST (Điền từ vào câu ngữ cảnh) */}
           {exerciseType === 'cloze' && (
             <div className="space-y-3 py-1 text-left">
               <div className="text-xs sm:text-sm text-[#c4c7c5] font-medium flex items-center gap-1.5">
                 <FileQuestion className="h-4 w-4 text-[#a8c7fa]" />
-                Điền từ tiếng Đức vào chỗ trống:
+                Điền từ tiếng Đức còn thiếu vào câu:
               </div>
               <div
                 style={{ borderRadius: 20 }}
@@ -837,13 +1287,13 @@ export function StudyView({
                 style={{ borderRadius: 9999 }}
                 className="text-xs sm:text-sm text-[#c4c7c5] bg-[#282a2c]/60 px-3.5 py-1.5 border border-[#3c4043]/80 inline-block"
               >
-                Gợi ý nghĩa: <span className="text-[#e3e3e3] font-semibold">{currentWord.vietnamese}</span>
+                Nghĩa cần điền: <span className="text-[#e3e3e3] font-semibold">{currentWord.vietnamese}</span>
               </div>
             </div>
           )}
         </div>
 
-        {/* German Special Umlaut Virtual Keypad (ä, ö, ü, ß, Ä, Ö, Ü) - Fits in a single row on iPhone 16 */}
+        {/* German Special Umlaut Virtual Keypad (ä, ö, ü, ß, Ä, Ö, Ü) */}
         {!isAnswerRevealed && (exerciseType === 'dictee' || exerciseType === 'reverse' || exerciseType === 'cloze') && (
           <div className="mt-2.5 pt-2.5 border-t border-[#3c4043]/60">
             <div className="flex items-center justify-center gap-1 sm:gap-1.5 flex-nowrap overflow-x-auto py-1">
@@ -873,7 +1323,7 @@ export function StudyView({
                   setUserInput(e.target.value)
                   if (fuzzyStatus !== 'idle') setFuzzyStatus('idle')
                 }}
-                placeholder="Gõ từ tiếng Đức..."
+                placeholder="Gõ từ tiếng Đức (ví dụ: der Tisch)..."
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="none"
@@ -901,7 +1351,7 @@ export function StudyView({
                 style={{ borderRadius: 16 }}
                 className="flex items-center gap-2 p-3 bg-[#5c3e00]/40 border border-[#f29900]/50 text-[#ffe082] text-xs sm:text-sm animate-in fade-in"
               >
-                <AlertTriangle className="h-4 w-4 shrink-0 text-[#fbbc04]" />
+                <AlertTriangle className="h-4 w-4 shrink-0 text-[#fbbc04] font-semibold" />
                 <span className="font-medium leading-tight">{fuzzyMessage}</span>
               </div>
             )}
@@ -994,24 +1444,25 @@ export function StudyView({
               {fuzzyStatus === 'correct' ? (
                 <span className="flex items-center gap-1.5 text-[#c4eed0] font-semibold text-center">
                   <CheckCircle2 className="h-4 w-4 text-[#34a853] shrink-0" />
-                  Chính xác! Bạn nhớ từ này rất tốt.
+                  Chính xác!{' '}
+                  {currentTask.round < currentTask.totalRounds
+                    ? `Sẵn sàng cho lần lặp ${currentTask.round + 1}/${currentTask.totalRounds}.`
+                    : 'Đã hoàn thành cả 4 vòng lặp của từ này!'}
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5 text-[#ffe082] font-semibold text-center">
                   <AlertTriangle className="h-4 w-4 text-[#fbbc04] shrink-0" />
-                  Từ này sẽ được ôn lại cuối phiên!
+                  Chưa chính xác! Thử thách này sẽ được đẩy xuống cuối phiên để làm lại.
                 </span>
               )}
             </div>
 
-            {/* Prominent Primary "Next Word" Button (Học từ tiếp theo) */}
+            {/* Prominent Primary "Next Card" Button */}
             <div className="pt-0.5">
               <Button
                 variant={fuzzyStatus === 'correct' ? 'primary' : 'default'}
                 size="lg"
-                onClick={() => {
-                  handleRate(fuzzyStatus === 'correct' ? 4 : 1)
-                }}
+                onClick={() => handleAdvanceTask()}
                 style={{ borderRadius: 9999 }}
                 className={`w-full h-12 sm:h-14 text-xs sm:text-sm md:text-base font-bold shadow-lg flex items-center justify-center gap-2 cursor-pointer ${
                   fuzzyStatus === 'correct'
@@ -1019,65 +1470,13 @@ export function StudyView({
                     : 'bg-[#5c3e00] text-[#ffe082] hover:bg-[#7c5800] border border-[#f29900]/40'
                 }`}
               >
-                <span>{fuzzyStatus === 'correct' ? 'Học từ tiếp theo' : 'Tiếp tục (Luyện lại sau)'}</span>
+                <span>
+                  {fuzzyStatus === 'correct'
+                    ? 'Tiếp tục thử thách tiếp theo'
+                    : 'Tiếp tục (Sẽ ôn lại cuối phiên)'}
+                </span>
                 <ArrowRight className="h-4 w-4" />
               </Button>
-            </div>
-
-            {/* Optional SM-2 Detailed Rating Row */}
-            <div className="pt-2.5 border-t border-[#3c4043]/50">
-              <div className="text-[11px] text-[#8e918f] text-center mb-1.5 font-medium">
-                Hoặc tự điều chỉnh độ khó thuật toán (SM-2):
-              </div>
-              <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
-                {/* Quality 1 (Quên) */}
-                <button
-                  onClick={() => handleRate(1)}
-                  style={{ borderRadius: 14 }}
-                  className="flex flex-col items-center justify-center py-2 px-1 bg-[#410002]/40 border border-[#93000a]/50 text-[#ffdad6] hover:bg-[#410002]/70 active:scale-95 transition-all cursor-pointer"
-                >
-                  <span className="text-[11px] sm:text-xs font-bold">Quên</span>
-                  <span className="text-[9px] sm:text-[10px] text-[#ffb4ab] mt-0.5">
-                    {getIntervalPreview(currentWord, 1)}
-                  </span>
-                </button>
-
-                {/* Quality 3 (Khó) */}
-                <button
-                  onClick={() => handleRate(3)}
-                  style={{ borderRadius: 14 }}
-                  className="flex flex-col items-center justify-center py-2 px-1 bg-[#2e1500]/40 border border-[#7c5800]/50 text-[#ffe082] hover:bg-[#2e1500]/70 active:scale-95 transition-all cursor-pointer"
-                >
-                  <span className="text-[11px] sm:text-xs font-bold">Khó</span>
-                  <span className="text-[9px] sm:text-[10px] text-[#ffd062] mt-0.5">
-                    {getIntervalPreview(currentWord, 3)}
-                  </span>
-                </button>
-
-                {/* Quality 4 (Tốt) */}
-                <button
-                  onClick={() => handleRate(4)}
-                  style={{ borderRadius: 14 }}
-                  className="flex flex-col items-center justify-center py-2 px-1 bg-[#004a77]/40 border border-[#004a77]/80 text-[#c2e7ff] hover:bg-[#004a77]/70 active:scale-95 transition-all cursor-pointer"
-                >
-                  <span className="text-[11px] sm:text-xs font-bold">Tốt</span>
-                  <span className="text-[9px] sm:text-[10px] text-[#a8c7fa] mt-0.5">
-                    {getIntervalPreview(currentWord, 4)}
-                  </span>
-                </button>
-
-                {/* Quality 5 (Dễ) */}
-                <button
-                  onClick={() => handleRate(5)}
-                  style={{ borderRadius: 14 }}
-                  className="flex flex-col items-center justify-center py-2 px-1 bg-[#003912]/40 border border-[#0f5223]/80 text-[#c4eed0] hover:bg-[#003912]/70 active:scale-95 transition-all cursor-pointer"
-                >
-                  <span className="text-[11px] sm:text-xs font-bold">Dễ</span>
-                  <span className="text-[9px] sm:text-[10px] text-[#97f5b5] mt-0.5">
-                    {getIntervalPreview(currentWord, 5)}
-                  </span>
-                </button>
-              </div>
             </div>
           </div>
         )}
