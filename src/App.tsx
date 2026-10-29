@@ -55,10 +55,24 @@ export function App() {
   // Offline status
   const [isOnline, setIsOnline] = useState(navigator.onLine)
 
-  // Load / Refresh data from IndexedDB
+  // Refresh only stats & allWords when a study session completes
+  // (Must NOT replace sessionWords automatically, so the user stays on the Session Completed screen)
+  const handleSessionComplete = useCallback(async () => {
+    try {
+      const [all, deckStats] = await Promise.all([
+        getAllWords(),
+        getDeckStats()
+      ])
+      setAllWords(all)
+      setStats(deckStats)
+    } catch (err) {
+      console.error('Failed to refresh stats after session:', err)
+    }
+  }, [])
+
+  // Full refresh from IndexedDB (used when modifying vocabulary or resetting in Settings)
   const refreshData = useCallback(async () => {
     try {
-      await initializeDefaultData()
       const [session, all, deckStats] = await Promise.all([
         getStudySessionWords(studyConfig.newWordsPerBatch),
         getAllWords(),
@@ -74,14 +88,18 @@ export function App() {
     }
   }, [studyConfig.newWordsPerBatch])
 
-  // Load next batch of new words from the warehouse pool
+  // Load next batch of new words from the warehouse pool when user explicitly clicks "Học thêm 10 từ mới"
   const handleLoadMoreNewWords = async (): Promise<Word[]> => {
     const moreWords = await getNewWordsFromPool(studyConfig.newWordsPerBatch)
     if (moreWords.length > 0) {
       setSessionWords(moreWords)
       playFeedback('success')
     }
-    const deckStats = await getDeckStats()
+    const [all, deckStats] = await Promise.all([
+      getAllWords(),
+      getDeckStats()
+    ])
+    setAllWords(all)
     setStats(deckStats)
     return moreWords
   }
@@ -247,7 +265,7 @@ export function App() {
               <StudyView
                 initialWords={sessionWords}
                 allWords={allWords}
-                onSessionComplete={refreshData}
+                onSessionComplete={handleSessionComplete}
                 onLoadMoreNewWords={handleLoadMoreNewWords}
               />
             )}

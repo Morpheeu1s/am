@@ -210,19 +210,23 @@ export async function addWord(word: Omit<Word, 'id'>): Promise<number> {
   // Sync to Supabase
   const supabase = getSupabaseClient()
   if (supabase) {
-    supabase.from('words').upsert({
-      german: germanWord,
-      vietnamese: wordWithDefaults.vietnamese,
-      ipa: wordWithDefaults.ipa,
-      category: wordWithDefaults.category,
-      example: wordWithDefaults.example || '',
-      example_vi: wordWithDefaults.exampleVi || '',
-      repetition: wordWithDefaults.repetition,
-      interval: wordWithDefaults.interval,
-      ease_factor: wordWithDefaults.easeFactor,
-      due_date: wordWithDefaults.dueDate,
-      mistakes: wordWithDefaults.mistakes
-    }, { onConflict: 'german' }).then(() => {}, () => {})
+    try {
+      await supabase.from('words').upsert({
+        german: germanWord,
+        vietnamese: wordWithDefaults.vietnamese,
+        ipa: wordWithDefaults.ipa,
+        category: wordWithDefaults.category,
+        example: wordWithDefaults.example || '',
+        example_vi: wordWithDefaults.exampleVi || '',
+        repetition: wordWithDefaults.repetition,
+        interval: wordWithDefaults.interval,
+        ease_factor: wordWithDefaults.easeFactor,
+        due_date: wordWithDefaults.dueDate,
+        mistakes: wordWithDefaults.mistakes
+      }, { onConflict: 'german' })
+    } catch {
+      // Offline resilient
+    }
   }
 
   return localId
@@ -244,22 +248,26 @@ export async function updateWord(id: number, changes: Partial<Word>): Promise<nu
   // Sync update to Supabase
   const supabase = getSupabaseClient()
   if (supabase) {
-    const word = await db.words.get(id)
-    if (word) {
-      const updatePayload: Record<string, unknown> = {}
-      if (changes.repetition !== undefined) updatePayload.repetition = changes.repetition
-      if (changes.interval !== undefined) updatePayload.interval = changes.interval
-      if (changes.easeFactor !== undefined) updatePayload.ease_factor = changes.easeFactor
-      if (changes.dueDate !== undefined) updatePayload.due_date = changes.dueDate
-      if (changes.mistakes !== undefined) updatePayload.mistakes = changes.mistakes
-      if (changes.vietnamese !== undefined) updatePayload.vietnamese = changes.vietnamese
-      if (changes.german !== undefined) updatePayload.german = changes.german
-      if (changes.example !== undefined) updatePayload.example = changes.example
-      if (changes.exampleVi !== undefined) updatePayload.example_vi = changes.exampleVi
-      if (changes.category !== undefined) updatePayload.category = changes.category
-      if (changes.ipa !== undefined) updatePayload.ipa = changes.ipa
+    try {
+      const word = await db.words.get(id)
+      if (word) {
+        const updatePayload: Record<string, unknown> = {}
+        if (changes.repetition !== undefined) updatePayload.repetition = changes.repetition
+        if (changes.interval !== undefined) updatePayload.interval = changes.interval
+        if (changes.easeFactor !== undefined) updatePayload.ease_factor = changes.easeFactor
+        if (changes.dueDate !== undefined) updatePayload.due_date = changes.dueDate
+        if (changes.mistakes !== undefined) updatePayload.mistakes = changes.mistakes
+        if (changes.vietnamese !== undefined) updatePayload.vietnamese = changes.vietnamese
+        if (changes.german !== undefined) updatePayload.german = changes.german
+        if (changes.example !== undefined) updatePayload.example = changes.example
+        if (changes.exampleVi !== undefined) updatePayload.example_vi = changes.exampleVi
+        if (changes.category !== undefined) updatePayload.category = changes.category
+        if (changes.ipa !== undefined) updatePayload.ipa = changes.ipa
 
-      supabase.from('words').update(updatePayload).eq('german', word.german).then(() => {}, () => {})
+        await supabase.from('words').update(updatePayload).eq('german', word.german)
+      }
+    } catch {
+      // Offline resilient
     }
   }
 
@@ -275,7 +283,11 @@ export async function deleteWord(id: number): Promise<void> {
 
   const supabase = getSupabaseClient()
   if (supabase && word) {
-    supabase.from('words').delete().eq('german', word.german).then(() => {}, () => {})
+    try {
+      await supabase.from('words').delete().eq('german', word.german)
+    } catch {
+      // Offline resilient
+    }
   }
 }
 

@@ -66,8 +66,8 @@ export function StudyView({
   // Track mistakes per word ID in this session to accurately score SM-2 quality at the end
   const [wordMistakesMap, setWordMistakesMap] = useState<Record<number, number>>({})
 
-  // Session state: 'overview' | 'active'
-  const [sessionState, setSessionState] = useState<'overview' | 'active'>('overview')
+  // Session state: 'overview' | 'active' | 'completed'
+  const [sessionState, setSessionState] = useState<'overview' | 'active' | 'completed'>('overview')
   const [isLoadingMore, setIsLoadingMore] = useState(false)
 
   // Answer interaction states
@@ -103,14 +103,16 @@ export function StudyView({
   const exerciseType =
     rawExerciseType === 'speaking' && !canSpeakNow ? 'scramble' : rawExerciseType
 
-  // Reset/sync when initialWords prop changes externally
+  // Reset/sync when initialWords prop changes externally (only when not on the completed screen)
   if (initialWords !== prevInitialWords) {
     setPrevInitialWords(initialWords)
-    const newTasks = buildInterleavedStudyTasks(initialWords)
-    setTasks(newTasks)
-    setCurrentIndex(0)
-    setCompletedTasksCount(0)
-    setWordMistakesMap({})
+    if (sessionState !== 'completed') {
+      const newTasks = buildInterleavedStudyTasks(initialWords)
+      setTasks(newTasks)
+      setCurrentIndex(0)
+      setCompletedTasksCount(0)
+      setWordMistakesMap({})
+    }
   }
 
   // Stop speech recognition if unmounted or card changes
@@ -547,14 +549,30 @@ export function StudyView({
   }
 
   // Advance to next task in interleaved queue & save SRS if word reached end
-  const handleAdvanceTask = async (customQuality?: ReviewQuality) => {
+  const handleAdvanceTask = async (customQuality?: ReviewQuality, forceSuccess?: boolean) => {
     if (!currentWord || !currentTask) return
     unlockAudio()
     playFeedback('click')
 
-    const isSuccess = fuzzyStatus === 'correct'
+    const isSuccess = forceSuccess ?? (fuzzyStatus === 'correct' || exerciseType === 'new_intro')
     const wordId = currentWord.id || 0
     const mistakesSoFar = (wordMistakesMap[wordId] || 0) + (isSuccess ? 0 : 1)
+
+    // If task was failed, push an extra reinforcement task for this word to the back!
+    if (!isSuccess) {
+      resetCardState()
+      const updatedTasks = [...tasks]
+      const reinforcementTask: StudyTask = {
+        word: currentWord,
+        exerciseType: currentTask.exerciseType,
+        round: currentTask.round,
+        totalRounds: currentTask.totalRounds
+      }
+      updatedTasks.push(reinforcementTask)
+      setTasks(updatedTasks)
+      setCurrentIndex((prev) => prev + 1)
+      return
+    }
 
     // Check if this is the final round for this word
     const remainingTasksForThisWord = tasks
@@ -577,28 +595,14 @@ export function StudyView({
     }
 
     resetCardState()
+    setCompletedTasksCount((prev) => prev + 1)
+    const nextIndex = currentIndex + 1
+    setCurrentIndex(nextIndex)
 
-    // If task was failed, push an extra reinforcement task for this word to the back!
-    if (!isSuccess) {
-      const updatedTasks = [...tasks]
-      const reinforcementTask: StudyTask = {
-        word: currentWord,
-        exerciseType: currentTask.exerciseType,
-        round: currentTask.round,
-        totalRounds: currentTask.totalRounds
-      }
-      updatedTasks.push(reinforcementTask)
-      setTasks(updatedTasks)
-      setCurrentIndex((prev) => prev + 1)
-    } else {
-      setCompletedTasksCount((prev) => prev + 1)
-      const nextIndex = currentIndex + 1
-      setCurrentIndex(nextIndex)
-
-      if (nextIndex >= tasks.length) {
-        triggerConfetti()
-        onSessionComplete?.()
-      }
+    if (nextIndex >= tasks.length) {
+      setSessionState('completed')
+      triggerConfetti()
+      onSessionComplete?.()
     }
   }
 
@@ -642,7 +646,7 @@ export function StudyView({
         resetCardState()
         setSessionState('active')
       } else {
-        setSessionState('active')
+        setSessionState('completed')
       }
     } catch (e) {
       console.error(e)
@@ -783,7 +787,7 @@ export function StudyView({
   }
 
   // 2. All cards completed Celebration view
-  if (!currentWord || currentIndex >= tasks.length) {
+  if (sessionState === 'completed' || !currentWord || currentIndex >= tasks.length) {
     return (
       <div className="flex flex-col items-center justify-center py-8 sm:py-12 px-3 text-center animate-in fade-in zoom-in-95 duration-300 w-full max-w-xl md:max-w-2xl mx-auto pb-16">
         <div className="relative mb-5 sm:mb-6">
@@ -985,7 +989,7 @@ export function StudyView({
                 onClick={() => {
                   playFeedback('success')
                   setFuzzyStatus('correct')
-                  handleAdvanceTask()
+                  handleAdvanceTask(undefined, true)
                 }}
                 style={{ borderRadius: 9999 }}
                 className="w-full font-bold h-12 sm:h-13 text-xs sm:text-sm shadow-md shadow-blue-500/20 cursor-pointer"
@@ -1364,7 +1368,7 @@ export function StudyView({
                   >
                     {tile.text}
                   </button>
-                ))}
+                ))
               </div>
 
               {/* Action buttons for scramble */}
